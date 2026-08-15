@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { API_URL } from '../lib/config';
 import type { Pairing } from '../lib/storage';
 
 interface Props {
@@ -8,20 +9,27 @@ interface Props {
   onLeave: () => void;
 }
 
-/** Settings: the Love Code, how to get the Home Screen widget, and Leave Space. */
+/** Settings: the Love Code, Home Screen widget setup, and Leave Space. */
 export function SettingsSheet({ pairing, online, onClose, onLeave }: Props) {
   const [confirming, setConfirming] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState('');
+  const [widgetOpen, setWidgetOpen] = useState(false);
 
-  async function copyCode() {
+  async function copy(key: string, value: string) {
     try {
-      await navigator.clipboard.writeText(pairing.loveCode);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
+      await navigator.clipboard.writeText(value);
+      setCopied(key);
+      window.setTimeout(() => setCopied((c) => (c === key ? '' : c)), 1600);
     } catch {
-      /* reading it out works too */
+      // Clipboard is blocked outside a secure context; the value is on screen
+      // and selectable, so this is not worth an error message.
     }
   }
+
+  // Everything a widget host needs, ready to paste.
+  const cardUrl = `${API_URL}/api/room/${pairing.roomId}/card`;
+  const widgetPageUrl = `${location.origin}/widget?room=${pairing.roomId}&user=${pairing.userId}&actions=1`;
+  const scriptUrl = `${location.origin}/anivi-widget.js`;
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -36,8 +44,8 @@ export function SettingsSheet({ pairing, online, onClose, onLeave }: Props) {
 
         <div className="sheet-row">
           <span className="sheet-label">Your Love Code</span>
-          <button className="chip" onClick={copyCode}>
-            {copied ? 'Copied ❤️' : pairing.loveCode || '—'}
+          <button className="chip" onClick={() => copy('code', pairing.loveCode)}>
+            {copied === 'code' ? 'Copied ❤️' : pairing.loveCode || '—'}
           </button>
         </div>
 
@@ -48,18 +56,70 @@ export function SettingsSheet({ pairing, online, onClose, onLeave }: Props) {
           </span>
         </div>
 
-        <div className="widget-note">
-          <p className="widget-note-title">❤️ Anivi on your Home Screen</p>
-          <p>
-            The Home Screen widget lives in the native Anivi apps — WidgetKit on iOS, Glance on
-            Android. Install the app on your phone, open it once with this Love Code, then add the
-            Anivi widget from the Home Screen.
-          </p>
-          <p>
-            This web version can still be added to your Home Screen: <b>Share → Add to Home
-            Screen</b> on iPhone, or <b>Install app</b> on Android.
-          </p>
-        </div>
+        <button
+          className="widget-toggle"
+          onClick={() => setWidgetOpen((v) => !v)}
+          aria-expanded={widgetOpen}
+        >
+          <span>❤️ Add the Home Screen widget</span>
+          <span aria-hidden="true">{widgetOpen ? '▾' : '▸'}</span>
+        </button>
+
+        {widgetOpen && (
+          <div className="widget-note">
+            <p>
+              iPhone and Android don&rsquo;t let a website install a widget on its own, so Anivi
+              feeds one through a widget app. Copy what you need here.
+            </p>
+
+            <div className="copy-row">
+              <span className="copy-label">Room ID</span>
+              <button className="copy-value" onClick={() => copy('room', pairing.roomId)}>
+                {copied === 'room' ? 'Copied ❤️' : pairing.roomId}
+              </button>
+            </div>
+
+            <p className="widget-note-title">iPhone — Scriptable</p>
+            <ol className="widget-steps">
+              <li>Install <b>Scriptable</b> (free, App Store).</li>
+              <li>
+                Open{' '}
+                <a href={scriptUrl} target="_blank" rel="noreferrer">
+                  the widget script
+                </a>{' '}
+                → select all → copy → paste into a new Scriptable script named <b>Anivi</b>.
+              </li>
+              <li>Home Screen → long press → <b>+</b> → Scriptable → Small or Medium.</li>
+              <li>
+                Long press the widget → <b>Edit Widget</b> → Script: <b>Anivi</b>, When
+                Interacting: <b>Run Script</b>, Parameter: your Room ID above.
+              </li>
+            </ol>
+
+            <p className="widget-note-title">Android — image or web widget</p>
+            <div className="copy-row">
+              <span className="copy-label">Card image URL</span>
+              <button className="copy-value" onClick={() => copy('card', cardUrl)}>
+                {copied === 'card' ? 'Copied ❤️' : cardUrl}
+              </button>
+            </div>
+            <div className="copy-row">
+              <span className="copy-label">Widget page URL</span>
+              <button className="copy-value" onClick={() => copy('page', widgetPageUrl)}>
+                {copied === 'page' ? 'Copied ❤️' : widgetPageUrl}
+              </button>
+            </div>
+            <p>
+              Add an &ldquo;image from URL&rdquo; widget and paste the card image URL, or a web
+              page widget and paste the widget page URL. Refresh every 15–30 minutes.
+            </p>
+
+            <p>
+              Want just the app icon? iPhone: <b>Share → Add to Home Screen</b>. Android:{' '}
+              <b>⋮ → Install app</b>.
+            </p>
+          </div>
+        )}
 
         {confirming ? (
           <div className="leave-confirm">

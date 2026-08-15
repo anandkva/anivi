@@ -31,7 +31,11 @@ What the server offers each widget surface:
 | `POST /api/room/{roomId}/miss_you` | Sends a heart (this is how a widget button works) |
 | `/widget?room={roomId}` | A small live web page, for hosts that render a URL |
 
-Your room id is in the app under **⚙️ Settings**.
+**Everything below is also inside the app**: open Anivi → **⚙️ Settings** →
+**❤️ Add the Home Screen widget**. That panel shows your room id, the card
+image URL and the widget page URL, each one tap to copy, plus a link to the
+iOS script. Doing it from the phone itself is far easier than typing these by
+hand.
 
 ---
 
@@ -43,7 +47,10 @@ lands on your Home Screen is a genuine iOS widget in the small and medium
 sizes.
 
 1. Install **Scriptable** from the App Store.
-2. Open it → **+** → paste [`ios-scriptable/anivi-widget.js`](ios-scriptable/anivi-widget.js) → name it **Anivi**.
+2. On the iPhone, open <https://anivi-tau.vercel.app/anivi-widget.js> in Safari
+   → select all → copy. In Scriptable tap **+**, paste, and name the script
+   **Anivi**. (The same file lives here as
+   [`ios-scriptable/anivi-widget.js`](ios-scriptable/anivi-widget.js).)
 3. Long-press the Home Screen → **+** → **Scriptable** → choose **Small** or **Medium** → **Add Widget**.
 4. Long-press the new widget → **Edit Widget**:
    - **Script**: `Anivi`

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './Canvas';
-import { MissYouOverlay } from './MissYouOverlay';
+import { MissYouOverlay, type MissYouKind } from './MissYouOverlay';
 import { SettingsSheet } from './SettingsSheet';
 import { sendMissYouHttp } from '../lib/api';
 import { API_URL } from '../lib/config';
@@ -8,7 +8,7 @@ import { publishPreview } from '../lib/preview';
 import { publishCard } from '../lib/widgetCard';
 import { PEN_COLORS, type Activity, type Stroke, type Tool } from '../lib/protocol';
 import { AniviSocket, type ConnectionStatus } from '../lib/socket';
-import { buzz, playHeartChime, unlockSound } from '../lib/sound';
+import { buzz, playHeartChime, playSentBlip, unlockSound } from '../lib/sound';
 import { savePairing, type Pairing } from '../lib/storage';
 
 /** The canvas snapshot is republished at most this often. */
@@ -32,6 +32,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [online, setOnline] = useState(0);
   const [missToken, setMissToken] = useState(0);
+  const [missKind, setMissKind] = useState<MissYouKind>('received');
   const [sentHeart, setSentHeart] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lost, setLost] = useState(false);
@@ -107,6 +108,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       }),
 
       socket.on('miss_you', (env) => {
+        setMissKind('received');
         setMissToken((t) => t + 1);
         activityRef.current = env.activity ?? {
           kind: 'miss_you',
@@ -216,7 +218,12 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
   async function handleMissYou() {
     unlockSound();
-    buzz(18);
+    // Sending should feel like something happened on this side too — a haptic
+    // tap, its own sound, and hearts rising off the button.
+    buzz([14, 30, 14]);
+    playSentBlip();
+    setMissKind('sent');
+    setMissToken((t) => t + 1);
     setSentHeart(true);
     window.setTimeout(() => setSentHeart(false), 1600);
 
@@ -342,12 +349,15 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
           ))}
         </div>
 
-        <button className="btn btn-miss" onClick={handleMissYou}>
+        <button
+          className={`btn btn-miss ${sentHeart ? 'sending' : ''}`}
+          onClick={handleMissYou}
+        >
           {sentHeart ? 'Sent ❤️' : 'Miss You ❤️'}
         </button>
       </footer>
 
-      <MissYouOverlay token={missToken} onDone={() => setMissToken(0)} />
+      <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
 
       {settingsOpen && (
         <SettingsSheet

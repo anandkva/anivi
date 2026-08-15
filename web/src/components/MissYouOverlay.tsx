@@ -1,13 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 
+/**
+ * `received` — a heart arrived: the full moment, dimming the canvas.
+ * `sent`     — you pressed the button: a lighter burst that confirms it left,
+ *              without covering the canvas you may still be drawing on.
+ */
+export type MissYouKind = 'received' | 'sent';
+
 interface Props {
-  /** Changes every time a heart arrives, which restarts the animation. */
+  /** Changes every time a heart happens, which restarts the animation. */
   token: number;
+  kind: MissYouKind;
   onDone: () => void;
 }
 
-/** The full-screen "they miss you" moment. */
-export function MissYouOverlay({ token, onDone }: Props) {
+const DURATION_MS: Record<MissYouKind, number> = {
+  received: 2600,
+  sent: 1500,
+};
+
+const HEART_COUNT: Record<MissYouKind, number> = {
+  received: 9,
+  sent: 6,
+};
+
+/** The Miss You moment, on both sides of it. */
+export function MissYouOverlay({ token, kind, onDone }: Props) {
   const [hearts, setHearts] = useState<{ id: number; left: number; delay: number }[]>([]);
   // Held in a ref so a re-render of the space (presence, a partner's stroke)
   // cannot restart the dismiss timer and leave the overlay hanging around.
@@ -17,20 +35,22 @@ export function MissYouOverlay({ token, onDone }: Props) {
   useEffect(() => {
     if (token === 0) return;
     setHearts(
-      Array.from({ length: 9 }, (_, i) => ({
+      Array.from({ length: HEART_COUNT[kind] }, (_, i) => ({
         id: token * 100 + i,
-        left: 8 + Math.random() * 84,
-        delay: Math.random() * 0.5,
+        // The sender's hearts rise from around the button; the receiver's fill
+        // the whole screen.
+        left: kind === 'sent' ? 30 + Math.random() * 40 : 8 + Math.random() * 84,
+        delay: Math.random() * (kind === 'sent' ? 0.25 : 0.5),
       })),
     );
-    const timer = window.setTimeout(() => onDoneRef.current(), 2600);
+    const timer = window.setTimeout(() => onDoneRef.current(), DURATION_MS[kind]);
     return () => window.clearTimeout(timer);
-  }, [token]);
+  }, [token, kind]);
 
   if (token === 0) return null;
 
   return (
-    <div className="miss-overlay" role="status" aria-live="polite">
+    <div className={`miss-overlay ${kind}`} role="status" aria-live="polite">
       {hearts.map((h) => (
         <span
           key={h.id}
@@ -45,7 +65,7 @@ export function MissYouOverlay({ token, onDone }: Props) {
         <div className="miss-heart" aria-hidden="true">
           ❤️
         </div>
-        <p className="miss-text">They miss you!</p>
+        <p className="miss-text">{kind === 'sent' ? 'Sent with love' : 'They miss you!'}</p>
       </div>
     </div>
   );

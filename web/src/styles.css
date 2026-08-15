@@ -373,11 +373,23 @@ body {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(255, 214, 228, 0.55);
-  backdrop-filter: blur(6px);
   z-index: 20;
   pointer-events: none;
   animation: fade-in 0.2s ease;
+}
+
+/* A heart arriving takes over the screen. */
+.miss-overlay.received {
+  background: rgba(255, 214, 228, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+/* Sending it is lighter: confirmation near the button, canvas still visible
+   and still usable, because you may be mid-drawing when you tap. */
+.miss-overlay.sent {
+  align-items: end;
+  padding-bottom: 20vh;
+  background: none;
 }
 
 .miss-card {
@@ -385,15 +397,38 @@ body {
   animation: pop 0.4s cubic-bezier(0.2, 1.4, 0.4, 1);
 }
 
+.miss-overlay.sent .miss-card {
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 20px;
+  padding: 14px 22px;
+  box-shadow: var(--shadow);
+  animation: pop 0.32s cubic-bezier(0.2, 1.4, 0.4, 1), fade-out 0.4s ease 1.1s forwards;
+}
+
 .miss-heart {
   font-size: 76px;
   animation: heartbeat 1s ease-in-out infinite;
+}
+
+.miss-overlay.sent .miss-heart {
+  font-size: 34px;
+  animation: send-off 0.6s ease-out;
 }
 
 .miss-text {
   font-size: 24px;
   font-weight: 700;
   color: var(--pink-deep);
+  margin: 0;
+}
+
+.miss-overlay.sent .miss-text {
+  font-size: 16px;
+}
+
+/* The button itself acknowledges the press. */
+.btn-miss.sending {
+  animation: miss-pulse 0.5s ease-out;
 }
 
 .floating-heart {
@@ -401,6 +436,12 @@ body {
   bottom: -40px;
   font-size: 26px;
   animation: float-up 2.4s ease-in forwards;
+}
+
+/* Sent hearts lift off the button and fade — a short flight, not a takeover. */
+.miss-overlay.sent .floating-heart {
+  font-size: 20px;
+  animation: float-up-short 1.4s ease-out forwards;
 }
 
 .connected-toast {
@@ -488,6 +529,23 @@ body {
   cursor: pointer;
 }
 
+.widget-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: rgba(255, 92, 138, 0.12);
+  color: var(--pink-deep);
+  border-radius: 14px;
+  padding: 14px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
 .widget-note {
   background: rgba(255, 92, 138, 0.08);
   border-radius: 16px;
@@ -495,6 +553,48 @@ body {
   font-size: 14px;
   line-height: 1.55;
   color: var(--ink-soft);
+}
+
+.widget-steps {
+  margin: 6px 0 12px;
+  padding-left: 20px;
+}
+
+.widget-steps li {
+  margin-bottom: 6px;
+}
+
+.copy-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 12px;
+}
+
+.copy-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+
+.copy-value {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  /* Long URLs must wrap rather than push the sheet sideways. */
+  overflow-wrap: anywhere;
+}
+
+.copy-value:active {
+  border-color: var(--pink);
 }
 
 .widget-note p {
@@ -541,6 +641,42 @@ body {
   }
 }
 
+@keyframes send-off {
+  from {
+    transform: scale(0.4) translateY(10px);
+  }
+  60% {
+    transform: scale(1.25) translateY(-4px);
+  }
+  to {
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes miss-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: var(--shadow);
+  }
+  35% {
+    transform: scale(0.96);
+  }
+  70% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 10px rgba(255, 92, 138, 0.18);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: var(--shadow);
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes float-up {
   from {
     transform: translateY(0) rotate(-8deg);
@@ -551,6 +687,20 @@ body {
   }
   to {
     transform: translateY(-90vh) rotate(12deg);
+    opacity: 0;
+  }
+}
+
+@keyframes float-up-short {
+  from {
+    transform: translateY(0) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-45vh) scale(1);
     opacity: 0;
   }
 }
