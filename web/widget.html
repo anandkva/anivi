@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Anivi widget</title>
+    <meta name="theme-color" content="#ff5c8a" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <style>
+      /* Deliberately self-contained and tiny: this page is rendered inside a
+         Home Screen widget host, often in a very small web view. */
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        font-family: ui-rounded, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #2b2440;
+        background: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .card {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 14px;
+        border-radius: 22px;
+        background: linear-gradient(160deg, #fff5f8, #ffe2ec);
+        box-shadow: 0 6px 20px rgba(226, 106, 143, 0.18);
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        color: #e8386c;
+        font-size: 15px;
+      }
+      .dot {
+        margin-left: auto;
+        font-size: 11px;
+        color: #6b6280;
+        font-weight: 500;
+      }
+      .preview {
+        flex: 1;
+        min-height: 0;
+        border-radius: 14px;
+        background: #fffafc center/contain no-repeat;
+        display: grid;
+        place-items: center;
+        color: #dcb6c6;
+        font-size: 13px;
+      }
+      .activity {
+        font-weight: 700;
+        font-size: 15px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .when {
+        font-size: 11px;
+        color: #8d8199;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .btn {
+        border: none;
+        border-radius: 999px;
+        padding: 8px 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .miss {
+        background: linear-gradient(135deg, #ff7aa2, #e8386c);
+        color: #fff;
+      }
+      .open {
+        background: rgba(255, 92, 138, 0.14);
+        color: #e8386c;
+        margin-left: auto;
+        text-decoration: none;
+        display: inline-block;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          color: #f6eef5;
+        }
+        .card {
+          background: linear-gradient(160deg, #241d2e, #2e2138);
+        }
+        .preview {
+          background-color: #fffafc;
+        }
+        .when {
+          color: #b6a8bf;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="card">
+      <div class="head">
+        <span>❤️ Anivi</span>
+        <span class="dot" id="presence"></span>
+      </div>
+      <div class="preview" id="preview">Loading…</div>
+      <div class="activity" id="activity">…</div>
+      <div class="row">
+        <span class="when" id="when"></span>
+        <a class="open" id="open" href="/">Open Anivi →</a>
+      </div>
+      <div class="row" id="actions" hidden>
+        <button class="btn miss" id="miss">Miss You ❤️</button>
+      </div>
+    </div>
+    <script type="module" src="/src/widget/widget.ts"></script>
+  </body>
+</html>

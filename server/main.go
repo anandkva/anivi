@@ -1,0 +1,323 @@
+// Command anivi-server is the realtime backend for Anivi.
+//
+// It keeps every couple's room in memory (no database for the MVP), carries
+// drawing and Miss You events over WebSocket, and exposes a small HTTP API
+// that the iOS and Android Home Screen widgets poll for their snapshot.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/anivi/server/pairing"
+	"github.com/anivi/server/protocol"
+	"github.com/anivi/server/room"
+	aniviws "github.com/anivi/server/websocket"
+)
+
+func main() {
+	addr := ":" + env("PORT", "8080")
+	origins := parseOrigins(env("ANIVI_ALLOWED_ORIGINS", "*"))
+
+	hub := room.NewHub()
+	hub.StartReaper(1 * time.Hour)
+	defer hub.Stop()
+
+	api := &api{hub: hub}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", api.health)
+	mux.HandleFunc("POST /api/pair/create", api.createPair)
+	mux.HandleFunc("POST /api/pair/join", api.joinPair)
+	mux.HandleFunc("GET /api/room/{roomId}", api.roomState)
+	mux.HandleFunc("GET /api/room/{roomId}/preview", api.getImage(assetPreview))
+	mux.HandleFunc("PUT /api/room/{roomId}/preview", api.putImage(assetPreview))
+	mux.HandleFunc("GET /api/room/{roomId}/card", api.getImage(assetCard))
+	mux.HandleFunc("PUT /api/room/{roomId}/card", api.putImage(assetCard))
+	mux.HandleFunc("POST /api/room/{roomId}/miss_you", api.missYou)
+	mux.HandleFunc("/ws", aniviws.Handler(hub, originAllowed(origins)))
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: withCORS(origins, mux),
+		// No WriteTimeout: it would kill live WebSocket connections.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	go func() {
+		log.Printf("anivi: listening on %s (origins: %s)", addr, strings.Join(origins, ", "))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("anivi: listen: %v", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	log.Println("anivi: shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
+
+type api struct{ hub *room.Hub }
+
+func (a *api) health(w http.ResponseWriter, r *http.Request) {
+	rooms, online := a.hub.Stats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"rooms":  rooms,
+		"online": online,
+		"time":   time.Now().UnixMilli(),
+	})
+}
+
+// createPair opens a new space. The caller keeps the returned ids locally;
+// there is nothing else to sign up for.
+func (a *api) createPair(w http.ResponseWriter, r *http.Request) {
+	rm := a.hub.Create()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"roomId":   rm.ID,
+		"loveCode": rm.LoveCode,
+		"userId":   pairing.UserID(),
+		"paired":   false,
+	})
+}
+
+func (a *api) joinPair(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		LoveCode string `json:"loveCode"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, protocol.ErrBadMessage, "could not read request")
+		return
+	}
+	code := pairing.NormalizeLoveCode(body.LoveCode)
+	if code == "" {
+		writeError(w, http.StatusBadRequest, protocol.ErrRoomNotFound, "that Love Code doesn't look right")
+		return
+	}
+	rm, err := a.hub.ByCode(code)
+	if err != nil {
+		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "no space with that Love Code")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"roomId":   rm.ID,
+		"loveCode": rm.LoveCode,
+		"userId":   pairing.UserID(),
+		"paired":   true,
+	})
+}
+
+// roomState is what the Home Screen widgets poll. It is deliberately tiny:
+// the latest activity line plus a pointer at the preview image.
+func (a *api) roomState(w http.ResponseWriter, r *http.Request) {
+	rm, err := a.hub.ByID(r.PathValue("roomId"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that space no longer exists")
+		return
+	}
+	activity := rm.LastActivity()
+	preview, hasPreview := rm.Preview()
+	card, hasCard := rm.Card()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"roomId":                rm.ID,
+		"paired":                rm.Paired(),
+		"online":                rm.Online(),
+		"lastActivity":          activity.Text,
+		"lastActivityKind":      activity.Kind,
+		"lastActivityUserId":    activity.UserID,
+		"lastActivityTimestamp": activity.Timestamp,
+		"hasPreview":            hasPreview,
+		"previewUpdatedAt":      preview.UpdatedAt,
+		"hasCard":               hasCard,
+		"cardUpdatedAt":         card.UpdatedAt,
+	})
+}
+
+// The two images a room holds for its widgets: the bare canvas snapshot, and
+// the fully composed card (drawing plus the activity line) that image-only
+// widget hosts display as-is.
+type asset int
+
+const (
+	assetPreview asset = iota
+	assetCard
+)
+
+func (a asset) get(rm *room.Room) (room.Preview, bool) {
+	if a == assetCard {
+		return rm.Card()
+	}
+	return rm.Preview()
+}
+
+func (a asset) set(rm *room.Room, data []byte, mime string) bool {
+	if a == assetCard {
+		return rm.SetCard(data, mime)
+	}
+	return rm.SetPreview(data, mime)
+}
+
+func (a *api) getImage(kind asset) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rm, err := a.hub.ByID(r.PathValue("roomId"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		img, ok := kind.get(rm)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		etag := `"` + strconv.FormatInt(img.UpdatedAt, 10) + `"`
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", img.Mime)
+		w.Header().Set("ETag", etag)
+		// Widgets should see a fresh snapshot as soon as one exists.
+		w.Header().Set("Cache-Control", "no-cache, max-age=0")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(img.Data)
+	}
+}
+
+// putImage accepts the compact snapshot generated by a main app. Only the
+// image is shared — never the stroke history — because that is all a widget
+// needs to draw.
+func (a *api) putImage(kind asset) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rm, err := a.hub.ByID(r.PathValue("roomId"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that space no longer exists")
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, protocol.ErrBadMessage, "could not read image")
+			return
+		}
+		mime := r.Header.Get("Content-Type")
+		if mime != "image/png" && mime != "image/jpeg" && mime != "image/webp" {
+			mime = "image/png"
+		}
+		if !kind.set(rm, data, mime) {
+			writeError(w, http.StatusBadRequest, protocol.ErrBadMessage, "image must be 1 byte - 512 KB")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// missYou lets a client send a heart over plain HTTP. Widgets cannot hold a
+// WebSocket open, so a widget action routes through here (or, on platforms
+// where background network work is unreliable, through the app after launch).
+func (a *api) missYou(w http.ResponseWriter, r *http.Request) {
+	rm, err := a.hub.ByID(r.PathValue("roomId"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that space no longer exists")
+		return
+	}
+	var body struct {
+		UserID string `json:"userId"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+
+	activity := protocol.Activity{
+		Kind:      protocol.TypeMissYou,
+		UserID:    body.UserID,
+		Text:      "They miss you ❤️",
+		Timestamp: time.Now().UnixMilli(),
+	}
+	rm.SetActivity(activity)
+
+	msg, err := json.Marshal(protocol.Envelope{
+		Type:      protocol.TypeMissYou,
+		RoomID:    rm.ID,
+		UserID:    body.UserID,
+		Activity:  &activity,
+		Timestamp: activity.Timestamp,
+	})
+	if err == nil {
+		rm.Broadcast(msg, "")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "timestamp": activity.Timestamp})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("anivi: write json: %v", err)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{"error": code, "message": message})
+}
+
+func withCORS(origins []string, next http.Handler) http.Handler {
+	allowed := originAllowed(origins)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && allowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Max-Age", "600")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func originAllowed(origins []string) func(string) bool {
+	return func(origin string) bool {
+		for _, o := range origins {
+			if o == "*" || strings.EqualFold(o, origin) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func parseOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, "*")
+	}
+	return out
+}
+
+func env(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

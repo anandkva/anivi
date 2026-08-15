@@ -1,0 +1,26 @@
+# Render blueprint for the Anivi realtime server.
+#
+# Render's free web service keeps WebSocket connections open, which is what
+# Anivi needs and what a serverless function cannot do. Deploy with:
+#   Render dashboard -> New -> Blueprint -> point at this repository.
+#
+# Free instances sleep after ~15 minutes without traffic; see DEPLOY.md for
+# what that means for a couple's space and how to keep it awake.
+
+services:
+  - type: web
+    name: anivi-server
+    runtime: docker
+    plan: free
+    region: singapore # pick the region closest to both partners
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8080
+      # Set this to your web origin(s) once Vercel gives you a domain,
+      # e.g. https://anivi.vercel.app,https://anivi.app
+      - key: ANIVI_ALLOWED_ORIGINS
+        sync: false

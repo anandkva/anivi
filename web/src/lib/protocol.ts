@@ -1,0 +1,76 @@
+/**
+ * The Anivi wire format, mirrored from server/protocol/protocol.go.
+ * Keep the two in sync — they are the contract every client shares.
+ */
+
+export type Tool = 'pen' | 'eraser';
+
+export interface Point {
+  x: number; // normalized 0..1
+  y: number; // normalized 0..1
+}
+
+export interface Stroke {
+  id: string;
+  userId: string;
+  tool: Tool;
+  color: string;
+  width: number; // normalized to canvas width
+  points: Point[];
+}
+
+export interface Activity {
+  kind: string;
+  userId: string;
+  text: string;
+  timestamp: number;
+}
+
+export type ClientMessageType =
+  | 'join'
+  | 'draw'
+  | 'undo'
+  | 'clear'
+  | 'sync'
+  | 'miss_you'
+  | 'ping'
+  | 'pong';
+
+export type ServerMessageType =
+  | ClientMessageType
+  | 'joined'
+  | 'state'
+  | 'presence'
+  | 'error';
+
+export interface Envelope {
+  type: ServerMessageType;
+  roomId?: string;
+  userId?: string;
+  loveCode?: string;
+  stroke?: Stroke;
+  strokeId?: string;
+  strokes?: Stroke[];
+  activity?: Activity;
+  online?: number;
+  paired?: boolean;
+  timestamp?: number;
+  message?: string;
+  code?: string;
+}
+
+export const PEN_COLORS = [
+  '#ff5c8a',
+  '#ff9f68',
+  '#ffd166',
+  '#6ee7b7',
+  '#7cc4ff',
+  '#c4a3ff',
+  '#2b2440',
+] as const;
+
+/** Normalizes whatever the partner typed into LOVE-XXXXX, or '' if unusable. */
+export function normalizeLoveCode(input: string): string {
+  const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^LOVE/, '');
+  return cleaned.length === 5 ? `LOVE-${cleaned}` : '';
+}
