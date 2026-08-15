@@ -1,0 +1,33 @@
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "❤️ Anivi",
+      "weight": "Bolder",
+      "color": "Accent",
+      "size": "Medium"
+    },
+    {
+      "type": "Image",
+      "url": "${previewUrl}",
+      "altText": "Your latest shared drawing",
+      "$when": "${hasPreview}"
+    },
+    {
+      "type": "TextBlock",
+      "text": "${lastActivity}",
+      "weight": "Bolder",
+      "wrap": true
+    }
+  ],
+  "actions": [
+    {
+      "type": "Action.OpenUrl",
+      "title": "Open Anivi →",
+      "url": "/"
+    }
+  ]
+}

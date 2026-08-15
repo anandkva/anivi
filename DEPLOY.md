@@ -1,5 +1,31 @@
 # Deploying Anivi (free)
 
+## Your deployment
+
+| | |
+| --- | --- |
+| Web app | <https://anivi-tau.vercel.app> |
+| Server | <https://anivi-server.onrender.com> |
+| WebSocket | `wss://anivi-server.onrender.com/ws` |
+
+The WebSocket URL is committed in [`web/.env.production`](web/.env.production),
+so every Vercel build picks it up — there is nothing to configure in the Vercel
+dashboard. **After changing that file you must redeploy**, because Vite bakes
+the value into the bundle at build time.
+
+Two things still worth doing on your setup:
+
+1. **Tighten the server's origins.** Render → `anivi-server` → Environment →
+   set `ANIVI_ALLOWED_ORIGINS` to `https://anivi-tau.vercel.app`. Right now any
+   website can open a socket to your server.
+2. **Keep it awake** (optional). The free instance sleeps after ~15 minutes;
+   see the caveat below.
+
+The rest of this document is the full walkthrough, useful if you redeploy
+somewhere else.
+
+---
+
 Two pieces go to two different places:
 
 | Piece | Goes to | Why |
@@ -98,20 +124,32 @@ All of them read the same `PORT` and `ANIVI_ALLOWED_ORIGINS` variables.
 
 1. Sign in at [vercel.com](https://vercel.com) with GitHub → **Add New → Project** → import `anivi`.
 2. Set **Root Directory** to `web`. Vercel detects Vite and reads `web/vercel.json`.
-3. Add an **Environment Variable** (Production, Preview and Development):
+3. Point the app at your server by editing [`web/.env.production`](web/.env.production):
 
    ```text
-   VITE_WS_URL = wss://anivi-server.onrender.com/ws
+   VITE_WS_URL=wss://anivi-server.onrender.com/ws
    ```
 
-   Use your own host. It must be `wss://` — a page served over HTTPS cannot
-   open a plain `ws://` socket. The REST base is derived from this
-   automatically (`wss://host/ws` → `https://host`), so there is nothing else
-   to set unless your API lives on a different host (`VITE_API_URL`).
-4. **Deploy**. You get `https://anivi-xxxx.vercel.app`.
+   It must be `wss://` — a page served over HTTPS cannot open a plain `ws://`
+   socket. The REST base is derived automatically (`wss://host/ws` →
+   `https://host`), so there is nothing else to set unless your API lives on a
+   different host (`VITE_API_URL`).
 
-> Vite bakes `VITE_*` variables in at build time. If you change `VITE_WS_URL`
-> later, **redeploy** — editing the variable alone changes nothing.
+   Prefer the dashboard instead? Add `VITE_WS_URL` under **Settings →
+   Environment Variables** — it overrides the file.
+4. **Deploy**. You get `https://anivi-tau.vercel.app`.
+
+> Vite bakes `VITE_*` values in at build time. Changing the URL — in the file
+> or in the dashboard — does nothing until you **redeploy**.
+>
+> Quick check that a deploy picked it up:
+>
+> ```bash
+> curl -s https://anivi-tau.vercel.app/assets/$(curl -s https://anivi-tau.vercel.app/ | grep -o 'storage-[^"]*\.js' | head -1) | grep -o 'wss://[^"]*'
+> ```
+>
+> It should print your `wss://…/ws`. If it prints nothing, the build had no
+> `VITE_WS_URL` and the app will sit on "Connecting…" forever.
 
 ---
 
@@ -120,13 +158,13 @@ All of them read the same `PORT` and `ANIVI_ALLOWED_ORIGINS` variables.
 Back in Render → your service → **Environment**, replace `ANIVI_ALLOWED_ORIGINS`:
 
 ```text
-https://anivi-xxxx.vercel.app
+https://anivi-tau.vercel.app
 ```
 
 Comma-separate if you add a custom domain later:
 
 ```text
-https://anivi-xxxx.vercel.app,https://anivi.app
+https://anivi-tau.vercel.app,https://anivi.app
 ```
 
 Save (the service redeploys). Browsers from any other origin are now refused;
@@ -146,7 +184,7 @@ On two phones, or two browsers with different profiles:
 5. Turn Wi-Fi off on B for ten seconds, then on. B reconnects on its own and
    the canvas comes back — that is the state replay after `join`.
 
-You can also share `https://anivi-xxxx.vercel.app/?code=LOVE-XXXXX` — the link
+You can also share `https://anivi-tau.vercel.app/?code=LOVE-XXXXX` — the link
 prefills the code for your partner.
 
 ---

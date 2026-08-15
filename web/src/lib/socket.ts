@@ -18,6 +18,15 @@ const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 15_000;
 
 /**
+ * How often the socket's real state is compared with what the app believes.
+ *
+ * A phone that was in a pocket for an hour — or a tab the browser froze — can
+ * come back with a dead socket and no `close` event ever delivered, leaving
+ * the UI claiming "online" forever. This is the check that notices.
+ */
+const WATCHDOG_MS = 10_000;
+
+/**
  * A WebSocket that survives the network dropping.
  *
  * On every (re)connect it joins the stored room and the server replays the
@@ -32,17 +41,20 @@ export class AniviSocket {
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private silenceTimer: number | null = null;
+  private watchdogTimer: number | null = null;
   private closedByUs = false;
   private status: ConnectionStatus = 'offline';
 
   connect(pairing: Pairing): void {
     this.pairing = pairing;
     this.closedByUs = false;
+    this.startWatchdog();
     this.open();
   }
 
   disconnect(): void {
     this.closedByUs = true;
+    this.stopWatchdog();
     this.clearTimers();
     this.ws?.close();
     this.ws = null;
@@ -192,6 +204,36 @@ export class AniviSocket {
     }, delay);
   }
 
+  /**
+   * Reconciles the app's idea of the connection with the socket's actual
+   * readyState, and reopens a socket that died quietly.
+   */
+  private startWatchdog(): void {
+    if (this.watchdogTimer !== null) return;
+    this.watchdogTimer = window.setInterval(() => {
+      if (this.closedByUs || !this.pairing) return;
+
+      const live = this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+      if (live) return;
+
+      if (this.status === 'online') this.setStatus('offline');
+      // A pending reconnect is already handling it; otherwise nothing is, and
+      // this is the only thing that will bring the connection back.
+      if (this.reconnectTimer === null && this.ws?.readyState !== WebSocket.CONNECTING) {
+        this.open();
+      }
+    }, WATCHDOG_MS);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer !== null) {
+      window.clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
+  // Only the reconnect and silence timers: the watchdog outlives a reconnect
+  // and is stopped solely by disconnect().
   private clearTimers(): void {
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);

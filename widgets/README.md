@@ -48,14 +48,15 @@ sizes.
 4. Long-press the new widget → **Edit Widget**:
    - **Script**: `Anivi`
    - **When Interacting**: `Run Script`
-   - **Parameter**:
+   - **Parameter**: your room id, e.g.
 
      ```text
-     room_xxxxxxxxxxxxxxxx|https://anivi-server.onrender.com|https://anivi.vercel.app
+     room_xxxxxxxxxxxxxxxx
      ```
 
-     That is `roomId|apiBase|appUrl`, using your own room id and your own two
-     deployed URLs.
+     The script already points at
+     `https://anivi-server.onrender.com` and `https://anivi-tau.vercel.app`.
+     To aim it somewhere else, pass all three: `roomId|apiBase|appUrl`.
 
 Tapping the widget opens Anivi straight into your shared space.
 
@@ -84,13 +85,13 @@ https://anivi-server.onrender.com/api/room/room_xxxxxxxxxxxxxxxx/card
 
 That URL always returns the current card — drawing, latest activity, time —
 already composed by Anivi. Set the refresh interval to 15–30 minutes and the
-tap action to open `https://anivi.vercel.app`.
+tap action to open `https://anivi-tau.vercel.app`.
 
 **B. A web-page widget.** If your widget app renders a URL instead of an image,
 use the live page — it updates itself every 30 seconds and can send a heart:
 
 ```text
-https://anivi.vercel.app/widget?room=room_xxxxxxxxxxxxxxxx&user=user_xxxxxxxx&actions=1
+https://anivi-tau.vercel.app/widget?room=room_xxxxxxxxxxxxxxxx&user=user_xxxxxxxx&actions=1
 ```
 
 Drop `&actions=1` if you don't want the **Miss You ❤️** button in the widget.

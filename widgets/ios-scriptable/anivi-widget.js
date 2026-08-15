@@ -10,17 +10,21 @@
 //   2. Add a new script called "Anivi" and paste this file in.
 //   3. Long-press the Home Screen → + → Scriptable → pick Small or Medium.
 //   4. Edit the widget: Script = Anivi, "When Interacting" = Run Script,
-//      Parameter = roomId|apiBase|appUrl
-//      e.g. room_ab12cd34|https://api.anivi.app|https://anivi.app
+//      Parameter = your room id, e.g.
+//        room_ab12cd34ef56gh78
+//      or, to point at a different deployment,
+//        roomId|apiBase|appUrl
 //
 // The room id is shown in Anivi under Settings. The widget never holds a
 // connection open — it reads the snapshot the app last published, which is
 // exactly what the OS allows a widget to do.
 
+// The deployed Anivi. Only roomId has to be supplied per couple — put it in
+// the widget's Parameter field (see below), or paste it here.
 const DEFAULTS = {
   roomId: '',
-  apiBase: '',
-  appUrl: '',
+  apiBase: 'https://anivi-server.onrender.com',
+  appUrl: 'https://anivi-tau.vercel.app',
   userId: 'widget',
 };
 
