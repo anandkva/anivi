@@ -24,3 +24,34 @@ services:
       # e.g. https://anivi.vercel.app,https://anivi.app
       - key: ANIVI_ALLOWED_ORIGINS
         sync: false
+
+      # Accounts, connections and chat history. Without it the server starts
+      # but nobody can sign in: membership lives in the database.
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        value: anivi
+
+      # Encrypts message text at rest. Generate with:
+      #   openssl rand -base64 32
+      # Keep it: losing it makes every stored message unreadable.
+      - key: ANIVI_MESSAGE_KEY
+        sync: false
+
+      # Web Push. Generate a pair with:  go run ./cmd/vapid
+      - key: ANIVI_VAPID_PUBLIC_KEY
+        sync: false
+      - key: ANIVI_VAPID_PRIVATE_KEY
+        sync: false
+      - key: ANIVI_VAPID_SUBJECT
+        sync: false
+
+      # Photo attachments.
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
