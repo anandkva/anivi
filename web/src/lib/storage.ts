@@ -82,3 +82,37 @@ export function saveLastConnectionId(connectionId: string): void {
     /* nothing to do */
   }
 }
+
+/**
+ * When this device last looked at each room.
+ *
+ * Kept locally rather than on the server: "seen" is a property of the device
+ * in your hand, and a read receipt is a feature Anivi has not chosen to have.
+ */
+const SEEN_KEY = 'anivi.seen.v1';
+
+type SeenMap = Record<string, number>;
+
+function readSeen(): SeenMap {
+  try {
+    return JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}') as SeenMap;
+  } catch {
+    return {};
+  }
+}
+
+export function lastSeenAt(roomId: string): number {
+  return readSeen()[roomId] ?? 0;
+}
+
+export function markSeen(roomId: string, at: number = Date.now()): void {
+  try {
+    const seen = readSeen();
+    // Never move the mark backwards: an old tab shouldn't un-read a room.
+    if ((seen[roomId] ?? 0) >= at) return;
+    seen[roomId] = at;
+    localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    /* private mode: badges just won't persist */
+  }
+}

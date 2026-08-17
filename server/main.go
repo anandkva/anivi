@@ -209,13 +209,16 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 // messages serves chat history over HTTP, for clients that want it without a
 // socket (a first paint, or the widget page).
 func (a *api) messages(w http.ResponseWriter, r *http.Request) {
-	rm, err := a.hub.ByID(r.PathValue("roomId"))
-	roomID := r.PathValue("roomId")
-	if err == nil {
-		roomID = rm.ID
+	// A conversation is the most private thing Anivi holds. Knowing a room id
+	// is not permission to read it: the caller has to be one of its two
+	// members, exactly as on the socket.
+	user, ok := a.authenticate(w, r)
+	if !ok {
+		return
 	}
-	if a.store == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"messages": []any{}, "hasMore": false})
+	roomID := r.PathValue("roomId")
+	if !a.isRoomMember(r.Context(), roomID, user.UserID) {
+		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that connection is not open to you")
 		return
 	}
 
@@ -244,9 +247,13 @@ func (a *api) messages(w http.ResponseWriter, r *http.Request) {
 // The client then sends a chat message referring to that key, so a half-
 // finished upload never becomes a broken message in the history.
 func (a *api) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.authenticate(w, r)
+	if !ok {
+		return
+	}
 	roomID := r.PathValue("roomId")
-	if _, err := a.hub.ByID(roomID); err != nil {
-		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that space no longer exists")
+	if !a.isRoomMember(r.Context(), roomID, user.UserID) {
+		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "that connection is not open to you")
 		return
 	}
 	if a.media == nil {
@@ -472,4 +479,20 @@ func originAllowed(origins []string) func(string) bool {
 		}
 		return false
 	}
+}
+
+// isRoomMember reports whether userID is one of the two people in the
+// connection that owns roomID.
+func (a *api) isRoomMember(ctx context.Context, roomID, userID string) bool {
+	if a.store == nil || roomID == "" || userID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, authTimeout)
+	defer cancel()
+
+	conn, err := a.store.ConnectionByRoom(ctx, roomID)
+	if err != nil {
+		return false
+	}
+	return conn.Has(userID)
 }

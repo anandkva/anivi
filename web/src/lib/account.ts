@@ -24,6 +24,9 @@ export interface Connection {
   peerName: string;
   peerCode: string;
   createdAt: number;
+  /** When the newest message in this room was sent, and by whom. */
+  lastActivityAt: number;
+  lastActivityBy?: string;
 }
 
 export interface Me {

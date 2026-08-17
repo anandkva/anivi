@@ -1749,3 +1749,25 @@ body {
   margin: 10px auto 0;
   font-size: 13px;
 }
+
+/* A connection with something new in it. */
+.connection-card.unread {
+  box-shadow: 0 2px 14px rgba(226, 106, 143, 0.28);
+}
+
+.connection-card.unread .connection-name {
+  font-weight: 800;
+}
+
+.connection-card.unread .connection-rel {
+  color: var(--pink-deep);
+  font-weight: 600;
+}
+
+.connection-badge {
+  margin-left: auto;
+  color: var(--pink-deep);
+  font-size: 18px;
+  line-height: 1;
+  animation: heartbeat 1.6s ease-in-out infinite;
+}

@@ -106,6 +106,12 @@ type ConnectionView struct {
 	PeerName     string `json:"peerName"`
 	PeerCode     string `json:"peerCode"`
 	CreatedAt    int64  `json:"createdAt"`
+	// LastActivityAt is when the newest message in this room was sent, and
+	// LastActivityBy who sent it. Home compares them with what this device has
+	// already seen to decide whether to show a badge — which is why they are
+	// on the list rather than requiring a request per connection.
+	LastActivityAt int64  `json:"lastActivityAt"`
+	LastActivityBy string `json:"lastActivityBy,omitempty"`
 }
 
 func (s *Store) ensureAccountIndexes(ctx context.Context) error {
@@ -356,16 +362,29 @@ func (s *Store) ConnectionsForUser(ctx context.Context, userID string) ([]Connec
 		return nil, err
 	}
 
+	roomIDs := make([]string, 0, len(records))
+	for _, rec := range records {
+		roomIDs = append(roomIDs, rec.RoomID)
+	}
+	activity, err := s.lastActivityByRoom(ctx, roomIDs)
+	if err != nil {
+		// A missing badge is not worth failing the whole home screen over.
+		activity = map[string]roomActivity{}
+	}
+
 	views := make([]ConnectionView, 0, len(records))
 	for _, rec := range records {
 		peer := peers[rec.Peer(userID)]
+		last := activity[rec.RoomID]
 		views = append(views, ConnectionView{
-			ConnectionID: rec.ConnectionID,
-			RoomID:       rec.RoomID,
-			Relationship: rec.Relationship,
-			PeerName:     peer.Name,
-			PeerCode:     peer.AniviCode,
-			CreatedAt:    rec.CreatedAt,
+			ConnectionID:   rec.ConnectionID,
+			RoomID:         rec.RoomID,
+			Relationship:   rec.Relationship,
+			PeerName:       peer.Name,
+			PeerCode:       peer.AniviCode,
+			CreatedAt:      rec.CreatedAt,
+			LastActivityAt: last.At,
+			LastActivityBy: last.By,
 		})
 	}
 	return views, nil
@@ -410,4 +429,46 @@ func (s *Store) DeleteConnection(ctx context.Context, connectionID, userID strin
 		return fmt.Errorf("store: delete connection messages: %w", err)
 	}
 	return nil
+}
+
+// roomActivity is the newest message in a room: when, and from whom.
+type roomActivity struct {
+	At int64
+	By string
+}
+
+// lastActivityByRoom finds the newest message in each of several rooms in one
+// round trip, so a home screen with many connections is still a single query.
+func (s *Store) lastActivityByRoom(ctx context.Context, roomIDs []string) (map[string]roomActivity, error) {
+	out := make(map[string]roomActivity, len(roomIDs))
+	if len(roomIDs) == 0 {
+		return out, nil
+	}
+
+	cursor, err := s.messages.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"roomId": bson.M{"$in": roomIDs}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "createdAt", Value: -1}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":       "$roomId",
+			"createdAt": bson.M{"$first": "$createdAt"},
+			"userId":    bson.M{"$first": "$userId"},
+		}}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: last activity: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var rows []struct {
+		RoomID    string `bson:"_id"`
+		CreatedAt int64  `bson:"createdAt"`
+		UserID    string `bson:"userId"`
+	}
+	if err := cursor.All(ctx, &rows); err != nil {
+		return nil, fmt.Errorf("store: decode last activity: %w", err)
+	}
+	for _, row := range rows {
+		out[row.RoomID] = roomActivity{At: row.CreatedAt, By: row.UserID}
+	}
+	return out, nil
 }

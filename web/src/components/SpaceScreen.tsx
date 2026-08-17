@@ -3,6 +3,7 @@ import { Canvas } from './Canvas';
 import { ChatSheet } from './ChatSheet';
 import { NudgeOverlay, type NudgeState } from './NudgeOverlay';
 import { SettingsSheet } from './SettingsSheet';
+import { fetchHistory } from '../lib/api';
 import { API_URL } from '../lib/config';
 import { publishPreview } from '../lib/preview';
 import { publishCard } from '../lib/widgetCard';
@@ -179,14 +180,38 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId, account.userId]);
 
-  // Ask for history whenever the chat comes to the front: cheap, and it heals
-  // a client that was away while the other person was talking.
+  /**
+   * Loads the conversation whenever the chat comes to the front.
+   *
+   * Over HTTP, not the socket: on the first render the socket is still
+   * opening, so a `chat_history` frame would be dropped and the chat would sit
+   * empty forever. HTTP has no such race, and the socket takes over for live
+   * messages once it connects.
+   */
   useEffect(() => {
     if (activeTab !== 'chat') return;
+    let cancelled = false;
+
     setUnread(0);
     setLoadingHistory(true);
-    socket.send({ type: 'chat_history', limit: 40 });
-  }, [activeTab, socket]);
+    fetchHistory(roomId, account.userId)
+      .then((page) => {
+        if (cancelled) return;
+        setHasMoreHistory(page.hasMore);
+        setMessages((prev) => page.messages.reduce(mergeMessage, prev));
+      })
+      .catch(() => {
+        // Fall back to the socket: it may be up even when the fetch failed.
+        socket.send({ type: 'chat_history', limit: 40 });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, socket, roomId, account.userId]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -251,11 +276,19 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
     await enablePush(account.userId);
   }
 
-  function loadOlderMessages() {
+  async function loadOlderMessages() {
     const oldest = messages[0];
     if (!oldest) return;
     setLoadingHistory(true);
-    socket.send({ type: 'chat_history', before: oldest.createdAt, limit: 40 });
+    try {
+      const page = await fetchHistory(roomId, account.userId, oldest.createdAt);
+      setHasMoreHistory(page.hasMore);
+      setMessages((prev) => page.messages.reduce(mergeMessage, prev));
+    } catch {
+      socket.send({ type: 'chat_history', before: oldest.createdAt, limit: 40 });
+    } finally {
+      setLoadingHistory(false);
+    }
   }
 
   function sendChat(chat: Partial<ChatMessage> & { kind: ChatMessage['kind'] }) {
@@ -448,7 +481,7 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
               attachment: { key, url: '', mime, size },
             })
           }
-          onLoadOlder={loadOlderMessages}
+          onLoadOlder={() => void loadOlderMessages()}
         />
       )}
 

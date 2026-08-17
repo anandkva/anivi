@@ -9,6 +9,7 @@ import {
   dropLegacyPairing,
   loadAccount,
   loadLastConnectionId,
+  markSeen,
   saveAccount,
   saveLastConnectionId,
 } from './lib/storage';
@@ -52,6 +53,44 @@ export default function App() {
     if (account) void refresh(account.userId);
   }, [account?.userId, refresh]);
 
+  /**
+   * Keeps Home current while it is on screen.
+   *
+   * Someone else can connect to you at any moment, and the first you'd know
+   * about it is a new card appearing. Polling only while Home is visible keeps
+   * that promise without a socket per account: the space itself is realtime,
+   * this list only has to be timely.
+   */
+  useEffect(() => {
+    if (!account || openId) return;
+
+    const tick = () => {
+      if (document.visibilityState === 'visible') void refresh(account.userId);
+    };
+    const timer = window.setInterval(tick, 15_000);
+    // Coming back to the app should feel instant, not "up to 15 seconds".
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
+    };
+  }, [account?.userId, openId, refresh]);
+
+  // A tap on a notification asks the app to open that room.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; roomId?: string } | null;
+      if (data?.type !== 'anivi:open-room' || !data.roomId) return;
+      const match = connections.find((c) => c.roomId === data.roomId);
+      if (match) handleOpen(match);
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [connections]);
+
   useEffect(() => {
     if (!justConnected) return;
     const timer = window.setTimeout(() => setJustConnected(null), 1600);
@@ -70,11 +109,15 @@ export default function App() {
   }
 
   function handleOpen(connection: Connection) {
+    // Opening a space is what clears its badge.
+    markSeen(connection.roomId);
     setOpenId(connection.connectionId);
     saveLastConnectionId(connection.connectionId);
   }
 
   function handleLeaveSpace() {
+    const leaving = connections.find((c) => c.connectionId === openId);
+    if (leaving) markSeen(leaving.roomId);
     setOpenId('');
     saveLastConnectionId('');
     if (account) void refresh(account.userId);

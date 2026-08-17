@@ -65,7 +65,7 @@ export function ChatSheet({
     setError('');
     setUploading(true);
     try {
-      const uploaded = await uploadAttachment(roomId, file);
+      const uploaded = await uploadAttachment(roomId, myUserId, file);
       onSendImage(uploaded.key, uploaded.mime, uploaded.size, draft.trim());
       setDraft('');
     } catch (err) {

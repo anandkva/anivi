@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { disconnect, resetPin, type Account, type Connection, type Relationship } from '../lib/account';
+import { lastSeenAt } from '../lib/storage';
 
 const RELATIONSHIP_BADGE: Record<Relationship, { art: string; label: string }> = {
   partner: { art: '❤️', label: 'Partner' },
@@ -138,8 +139,17 @@ export function HomeScreen({
         <ul className="connection-list">
           {connections.map((c) => {
             const badge = RELATIONSHIP_BADGE[c.relationship] ?? RELATIONSHIP_BADGE.partner;
+            // Unread is "newer than this device last looked", and never your
+            // own message: you don't have unread messages from yourself.
+            const unread =
+              c.lastActivityAt > 0 &&
+              c.lastActivityBy !== account.userId &&
+              c.lastActivityAt > lastSeenAt(c.roomId);
             return (
-              <li key={c.connectionId} className={`connection-card ${c.relationship}`}>
+              <li
+                key={c.connectionId}
+                className={`connection-card ${c.relationship} ${unread ? 'unread' : ''}`}
+              >
                 <button className="connection-open" onClick={() => onOpen(c)}>
                   <span className="connection-art" aria-hidden="true">
                     {badge.art}
@@ -147,12 +157,18 @@ export function HomeScreen({
                   <span className="connection-body">
                     <span className="connection-name">{c.peerName}</span>
                     <span className="connection-rel">
-                      {badge.art} {badge.label}
+                      {unread ? 'New message 💬' : `${badge.art} ${badge.label}`}
                     </span>
                   </span>
-                  <span className="connection-go" aria-hidden="true">
-                    →
-                  </span>
+                  {unread ? (
+                    <span className="connection-badge" aria-label="New message">
+                      ●
+                    </span>
+                  ) : (
+                    <span className="connection-go" aria-hidden="true">
+                      →
+                    </span>
+                  )}
                 </button>
                 <button
                   className="connection-remove"
