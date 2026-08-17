@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
+	"github.com/anivi/server/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,7 +22,10 @@ const (
 // Handler upgrades an HTTP request into an Anivi realtime session.
 // allowedOrigin decides which browser origins may connect; native clients send
 // no Origin header and are always allowed.
-func Handler(hub *room.Hub, originAllowed func(string) bool) http.HandlerFunc {
+//
+// store and media may be nil: without them chat is live-only and attachments
+// are unavailable, but drawing and Miss You are unaffected.
+func Handler(hub *room.Hub, store Persister, media AttachmentLinker, originAllowed func(string) bool) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -39,7 +44,7 @@ func Handler(hub *room.Hub, originAllowed func(string) bool) http.HandlerFunc {
 			// Upgrade already wrote an error response.
 			return
 		}
-		c := newClient(hub, conn)
+		c := newClient(hub, store, media, conn)
 		go c.writePump()
 
 		// A client may pass its pairing in the query string so that a
@@ -88,6 +93,10 @@ func (c *Client) handleMessage(env protocol.Envelope) {
 		c.sendState(r)
 	case protocol.TypeMissYou:
 		c.handleMissYou(r)
+	case protocol.TypeChat:
+		c.handleChat(r, env)
+	case protocol.TypeChatHistory:
+		c.handleChatHistory(r, env)
 	default:
 		c.sendError(protocol.ErrBadMessage, "unknown message type: "+env.Type)
 	}
@@ -114,6 +123,11 @@ func (c *Client) handleJoin(env protocol.Envelope) {
 			return
 		}
 		r, err = c.hub.ByCode(code)
+		if err != nil {
+			// The partner may be joining a space this process has not loaded
+			// since it restarted. The database still knows the pairing.
+			r, err = c.reviveFromStore(code)
+		}
 	default:
 		c.sendError(protocol.ErrBadMessage, "join needs a roomId or a loveCode")
 		return
@@ -136,6 +150,10 @@ func (c *Client) handleJoin(env protocol.Envelope) {
 	c.room = r
 	online := r.Join(c)
 
+	// Keep the durable record fresh, so this pairing can be rebuilt after a
+	// restart even if neither partner has the room id to hand.
+	c.rememberRoom(r)
+
 	c.sendEnvelope(protocol.Envelope{
 		Type:      protocol.TypeJoined,
 		RoomID:    r.ID,
@@ -147,6 +165,45 @@ func (c *Client) handleJoin(env protocol.Envelope) {
 	})
 	c.sendState(r)
 	broadcastPresence(r, online)
+}
+
+// reviveFromStore rebuilds a room from its durable record when this process
+// has never heard of the Love Code — the case where the partner reconnects
+// first after a restart.
+func (c *Client) reviveFromStore(loveCode string) (*room.Room, error) {
+	if c.store == nil {
+		return nil, room.ErrNotFound
+	}
+	finder, ok := c.store.(interface {
+		RoomByCode(ctx context.Context, loveCode string) (store.RoomRecord, error)
+	})
+	if !ok {
+		return nil, room.ErrNotFound
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+
+	rec, err := finder.RoomByCode(ctx, loveCode)
+	if err != nil {
+		return nil, room.ErrNotFound
+	}
+	return c.hub.Reclaim(rec.RoomID, rec.LoveCode)
+}
+
+// rememberRoom records the pairing so it outlives this process.
+func (c *Client) rememberRoom(r *room.Room) {
+	if c.store == nil {
+		return
+	}
+	roomID, loveCode := r.ID, r.LoveCode
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+		defer cancel()
+		if err := c.store.SaveRoom(ctx, roomID, loveCode); err != nil {
+			log.Printf("anivi: save room %s: %v", roomID, err)
+		}
+	}()
 }
 
 // sendState replays the whole room so a fresh or reconnected client draws

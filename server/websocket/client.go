@@ -3,6 +3,7 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"time"
@@ -31,9 +32,25 @@ const (
 	sendBuffer = 256
 )
 
+// Persister is the subset of the store the realtime layer needs. It is an
+// interface (and may be nil) so chat degrades to live-only when no database is
+// configured, instead of taking the socket down with it.
+type Persister interface {
+	SaveMessage(ctx context.Context, msg protocol.ChatMessage) error
+	Messages(ctx context.Context, roomID string, before int64, limit int) ([]protocol.ChatMessage, bool, error)
+	SaveRoom(ctx context.Context, roomID, loveCode string) error
+}
+
+// AttachmentLinker mints a readable URL for a stored attachment key.
+type AttachmentLinker interface {
+	URL(ctx context.Context, key string) (string, error)
+}
+
 // Client is one device's connection.
 type Client struct {
 	hub    *room.Hub
+	store  Persister
+	media  AttachmentLinker
 	conn   *websocket.Conn
 	send   chan []byte
 	connID string
@@ -44,9 +61,11 @@ type Client struct {
 	missYou missYouGate
 }
 
-func newClient(hub *room.Hub, conn *websocket.Conn) *Client {
+func newClient(hub *room.Hub, store Persister, media AttachmentLinker, conn *websocket.Conn) *Client {
 	return &Client{
 		hub:    hub,
+		store:  store,
+		media:  media,
 		conn:   conn,
 		send:   make(chan []byte, sendBuffer),
 		connID: pairing.StrokeID(),

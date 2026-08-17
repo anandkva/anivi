@@ -17,7 +17,7 @@ import (
 func newTestServer(t *testing.T) (*room.Hub, string) {
 	t.Helper()
 	hub := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(hub, func(string) bool { return true }))
+	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, func(string) bool { return true }))
 	t.Cleanup(srv.Close)
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
@@ -194,7 +194,7 @@ func TestReclaimAfterServerRestart(t *testing.T) {
 
 	// Stand in for a restart: a hub that has never heard of this room.
 	fresh := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(fresh, func(string) bool { return true }))
+	srv := httptest.NewServer(aniviws.Handler(fresh, nil, nil, func(string) bool { return true }))
 	defer srv.Close()
 	freshURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
@@ -222,7 +222,7 @@ func TestReclaimRejectsAMismatchedCode(t *testing.T) {
 	rm := hub.Create()
 
 	fresh := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(fresh, func(string) bool { return true }))
+	srv := httptest.NewServer(aniviws.Handler(fresh, nil, nil, func(string) bool { return true }))
 	defer srv.Close()
 	freshURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
@@ -277,7 +277,7 @@ func TestApplicationPingIsAnswered(t *testing.T) {
 
 func TestOriginIsChecked(t *testing.T) {
 	hub := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(hub, func(o string) bool { return o == "https://anivi.app" }))
+	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, func(o string) bool { return o == "https://anivi.app" }))
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http")
 

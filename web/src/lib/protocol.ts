@@ -26,6 +26,32 @@ export interface Activity {
   timestamp: number;
 }
 
+export interface Attachment {
+  key: string;
+  /** Freshly signed on every read, so an old photo still opens. */
+  url: string;
+  mime: string;
+  size: number;
+  width?: number;
+  height?: number;
+}
+
+export type ChatKind = 'text' | 'sticker' | 'image';
+
+export interface ChatMessage {
+  id: string;
+  roomId: string;
+  userId: string;
+  kind: ChatKind;
+  text?: string;
+  /** Names a piece of clipart the clients know how to draw. */
+  sticker?: string;
+  attachment?: Attachment;
+  createdAt: number;
+  /** Local only: set while an outgoing message is still in flight. */
+  pending?: boolean;
+}
+
 export type ClientMessageType =
   | 'join'
   | 'draw'
@@ -33,6 +59,8 @@ export type ClientMessageType =
   | 'clear'
   | 'sync'
   | 'miss_you'
+  | 'chat'
+  | 'chat_history'
   | 'ping'
   | 'pong';
 
@@ -52,6 +80,11 @@ export interface Envelope {
   strokeId?: string;
   strokes?: Stroke[];
   activity?: Activity;
+  chat?: ChatMessage;
+  messages?: ChatMessage[];
+  before?: number;
+  limit?: number;
+  hasMore?: boolean;
   online?: number;
   paired?: boolean;
   timestamp?: number;

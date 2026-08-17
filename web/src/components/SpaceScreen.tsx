@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './Canvas';
+import { ChatSheet } from './ChatSheet';
 import { MissYouOverlay, type MissYouKind } from './MissYouOverlay';
 import { SettingsSheet } from './SettingsSheet';
 import { sendMissYouHttp } from '../lib/api';
 import { API_URL } from '../lib/config';
 import { publishPreview } from '../lib/preview';
 import { publishCard } from '../lib/widgetCard';
-import { PEN_COLORS, type Activity, type Stroke, type Tool } from '../lib/protocol';
+import { PEN_COLORS, type Activity, type ChatMessage, type Stroke, type Tool } from '../lib/protocol';
 import { AniviSocket, type ConnectionStatus } from '../lib/socket';
 import { buzz, playHeartChime, playSentBlip, unlockSound } from '../lib/sound';
 import { savePairing, type Pairing } from '../lib/storage';
@@ -36,6 +37,15 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const [sentHeart, setSentHeart] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lost, setLost] = useState(false);
+
+  const [chatOpen, setChatOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [unread, setUnread] = useState(0);
+  // Read inside socket callbacks, which capture the first render's values.
+  const chatOpenRef = useRef(false);
+  chatOpenRef.current = chatOpen;
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>(PEN_COLORS[0]);
   const [width, setWidth] = useState(PEN_WIDTHS[1].value);
@@ -98,6 +108,29 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
           savePairing(next);
           onPairingChange(next);
         }
+      }),
+
+      socket.on('chat', (env) => {
+        const incoming = env.chat;
+        if (!incoming) return;
+        setMessages((prev) => mergeMessage(prev, incoming));
+
+        if (incoming.userId === pairing.userId) return; // our own echo
+        if (!chatOpenRef.current) setUnread((n) => n + 1);
+        // A "miss you" sticker deserves the same moment as the button.
+        if (incoming.kind === 'sticker' && incoming.sticker === 'miss_you') {
+          setMissKind('received');
+          setMissToken((t) => t + 1);
+        }
+        playHeartChime();
+        buzz(12);
+      }),
+
+      socket.on('chat_history', (env) => {
+        setLoadingHistory(false);
+        setHasMoreHistory(Boolean(env.hasMore));
+        const page = env.messages ?? [];
+        setMessages((prev) => page.reduce(mergeMessage, prev));
       }),
 
       socket.on('error', (env) => {
@@ -205,6 +238,51 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
     [socket, pairing.roomId, pairing.userId, schedulePreview],
   );
 
+  function openChat() {
+    unlockSound();
+    setChatOpen(true);
+    setUnread(0);
+    // Ask for history each time the sheet opens: cheap, and it heals a client
+    // that was offline while the partner was talking.
+    setLoadingHistory(true);
+    socket.send({ type: 'chat_history', limit: 40 });
+  }
+
+  function loadOlderMessages() {
+    const oldest = messages[0];
+    if (!oldest) return;
+    setLoadingHistory(true);
+    socket.send({ type: 'chat_history', before: oldest.createdAt, limit: 40 });
+  }
+
+  function sendChat(chat: Partial<ChatMessage> & { kind: ChatMessage['kind'] }) {
+    // The server assigns the real id and timestamp and echoes the message
+    // back; until then this local copy keeps the conversation responsive.
+    const optimistic: ChatMessage = {
+      id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      roomId: pairing.roomId,
+      userId: pairing.userId,
+      kind: chat.kind,
+      text: chat.text,
+      sticker: chat.sticker,
+      attachment: chat.attachment,
+      createdAt: Date.now(),
+      pending: true,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+
+    const sent = socket.send({
+      type: 'chat',
+      roomId: pairing.roomId,
+      chat: { ...optimistic, pending: undefined } as ChatMessage,
+    });
+    if (!sent) {
+      // Offline: drop the optimistic bubble rather than pretend it was sent.
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+    }
+    return sent;
+  }
+
   function handleUndo() {
     // The server decides which stroke disappears and tells both sides.
     socket.send({ type: 'undo' });
@@ -257,6 +335,15 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       <header className="topbar">
         <span className="brand">❤️ Anivi</span>
         <span className={statusPill.className}>{statusPill.text}</span>
+        <button
+          className="icon-btn chat-btn"
+          onClick={openChat}
+          aria-label={unread > 0 ? `Chat, ${unread} unread` : 'Chat'}
+          title="Chat"
+        >
+          💬
+          {unread > 0 && <span className="unread">{unread > 9 ? '9+' : unread}</span>}
+        </button>
         <button
           className="icon-btn"
           onClick={() => setSettingsOpen(true)}
@@ -359,6 +446,27 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
       <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
 
+      {chatOpen && (
+        <ChatSheet
+          messages={messages}
+          myUserId={pairing.userId}
+          roomId={pairing.roomId}
+          hasMore={hasMoreHistory}
+          loadingHistory={loadingHistory}
+          onClose={() => setChatOpen(false)}
+          onSendText={(text) => sendChat({ kind: 'text', text })}
+          onSendSticker={(sticker) => sendChat({ kind: 'sticker', sticker })}
+          onSendImage={(key, mime, size, caption) =>
+            sendChat({
+              kind: 'image',
+              text: caption || undefined,
+              attachment: { key, url: '', mime, size },
+            })
+          }
+          onLoadOlder={loadOlderMessages}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsSheet
           pairing={pairing}
@@ -369,6 +477,45 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       )}
     </div>
   );
+}
+
+/**
+ * Adds a message to the conversation, keeping it ordered and free of
+ * duplicates.
+ *
+ * The server echoes every message back with its authoritative id, so an
+ * optimistic local bubble has to be recognised and replaced — otherwise you'd
+ * see everything you send twice.
+ */
+function mergeMessage(prev: ChatMessage[], msg: ChatMessage): ChatMessage[] {
+  const byId = prev.findIndex((m) => m.id === msg.id);
+  if (byId !== -1) {
+    const next = prev.slice();
+    next[byId] = msg;
+    return next;
+  }
+
+  const pendingTwin = prev.findIndex(
+    (m) =>
+      m.pending &&
+      m.userId === msg.userId &&
+      m.kind === msg.kind &&
+      (m.text ?? '') === (msg.text ?? '') &&
+      (m.sticker ?? '') === (msg.sticker ?? '') &&
+      (m.attachment?.key ?? '') === (msg.attachment?.key ?? '') &&
+      Math.abs(m.createdAt - msg.createdAt) < 30_000,
+  );
+  if (pendingTwin !== -1) {
+    const next = prev.slice();
+    next[pendingTwin] = msg;
+    return next;
+  }
+
+  // History pages arrive oldest-first and out of band with live messages, so
+  // insert by time rather than appending blindly.
+  const next = [...prev, msg];
+  next.sort((a, b) => a.createdAt - b.createdAt);
+  return next;
 }
 
 /** Replaces a stroke with the same id, or appends it. */
