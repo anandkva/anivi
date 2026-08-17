@@ -46,7 +46,15 @@ type Room struct {
 	lastActivity protocol.Activity
 	preview      Preview
 	card         Preview
+	nudges       map[string]pendingNudge
 	emptySince   time.Time
+}
+
+// pendingNudge is a sticker one partner has sent and the other has not
+// answered yet.
+type pendingNudge struct {
+	userID string
+	at     time.Time
 }
 
 func newRoom(id, loveCode string) *Room {
@@ -57,6 +65,7 @@ func newRoom(id, loveCode string) *Room {
 		CreatedAt:  now,
 		subs:       make(map[string]Subscriber),
 		members:    make(map[string]time.Time),
+		nudges:     make(map[string]pendingNudge),
 		emptySince: now,
 		lastActivity: protocol.Activity{
 			Kind:      "created",
@@ -199,6 +208,49 @@ func (r *Room) Strokes() []protocol.Stroke {
 	out := make([]protocol.Stroke, len(r.strokes))
 	copy(out, r.strokes)
 	return out
+}
+
+// Nudge records that userID reached out with a sticker, and reports whether
+// that answers the partner's own pending nudge.
+//
+// This is what turns a sticker into something mutual: the first tap waits, and
+// the same sticker coming back from the other side within the window is a
+// match — a hug only happens when both people hug.
+func (r *Room) Nudge(sticker, userID string, window time.Duration) (matched bool) {
+	now := time.Now()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Drop anything nobody answered in time, so the map cannot grow with
+	// stickers that were never reciprocated.
+	for name, p := range r.nudges {
+		if now.Sub(p.at) > window {
+			delete(r.nudges, name)
+		}
+	}
+
+	if p, ok := r.nudges[sticker]; ok && p.userID != userID {
+		// The partner was waiting for exactly this.
+		delete(r.nudges, sticker)
+		return true
+	}
+
+	// Either nobody was waiting, or this is the same person tapping again —
+	// refresh their wait rather than matching them with themselves.
+	r.nudges[sticker] = pendingNudge{userID: userID, at: now}
+	return false
+}
+
+// PendingNudge reports whether someone is still waiting on this sticker.
+func (r *Room) PendingNudge(sticker string, window time.Duration) (userID string, waiting bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.nudges[sticker]
+	if !ok || time.Since(p.at) > window {
+		return "", false
+	}
+	return p.userID, true
 }
 
 // SetActivity records the latest room event (used by Miss You).

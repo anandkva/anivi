@@ -59,6 +59,8 @@ type Client struct {
 	closed chan struct{}
 	// missYou throttles the Miss You button. Only readPump touches it.
 	missYou missYouGate
+	// lastNudge throttles sticker taps. Only readPump touches it.
+	lastNudge time.Time
 }
 
 func newClient(hub *room.Hub, store Persister, media AttachmentLinker, conn *websocket.Conn) *Client {

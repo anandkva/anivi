@@ -95,6 +95,8 @@ func (c *Client) handleMessage(env protocol.Envelope) {
 		c.handleMissYou(r)
 	case protocol.TypeChat:
 		c.handleChat(r, env)
+	case protocol.TypeNudge:
+		c.handleNudge(r, env)
 	case protocol.TypeChatHistory:
 		c.handleChatHistory(r, env)
 	default:

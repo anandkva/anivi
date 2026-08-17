@@ -15,9 +15,15 @@ const (
 	TypeChat        = "chat"
 	TypeChatHistory = "chat_history"
 	TypeChatRead    = "chat_read"
+	TypeNudge       = "nudge"
 	TypePing        = "ping"
 	TypePong        = "pong"
 )
+
+// TypeNudgeMatch is sent to both partners when one answers the other's nudge
+// with the same sticker — the moment a hug stops being a message and becomes
+// something they did together.
+const TypeNudgeMatch = "nudge_match"
 
 // Chat message kinds.
 const (
@@ -104,6 +110,13 @@ type Envelope struct {
 	StrokeID string    `json:"strokeId,omitempty"`
 	Strokes  []Stroke  `json:"strokes,omitempty"`
 	Activity *Activity `json:"activity,omitempty"`
+
+	// Sticker names the clipart a nudge was sent with, and Label is the
+	// client's own wording for it ("🤗 Hug You"). The server keeps no
+	// vocabulary of its own: it passes the name through and uses the label
+	// only for the Home Screen line.
+	Sticker string `json:"sticker,omitempty"`
+	Label   string `json:"label,omitempty"`
 
 	// Chat carries a single message; Messages carries a page of history,
 	// oldest first. Before/Limit page backwards through it.

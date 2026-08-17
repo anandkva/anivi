@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './Canvas';
 import { ChatSheet } from './ChatSheet';
 import { MissYouOverlay, type MissYouKind } from './MissYouOverlay';
+import { NudgeOverlay, type NudgeState } from './NudgeOverlay';
 import { SettingsSheet } from './SettingsSheet';
+import { stickerFor } from '../lib/stickers';
 import { sendMissYouHttp } from '../lib/api';
 import { API_URL } from '../lib/config';
 import { publishPreview } from '../lib/preview';
@@ -43,6 +45,9 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [unread, setUnread] = useState(0);
+  /** Set when the partner draws while you are looking at the chat. */
+  const [boardNudge, setBoardNudge] = useState(false);
+  const [nudge, setNudge] = useState<NudgeState>({ phase: 'idle' });
   // Read inside socket callbacks, which capture the first render's values.
   const activeTabRef = useRef<'chat' | 'board'>('chat');
   activeTabRef.current = activeTab;
@@ -92,6 +97,11 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       socket.on('draw', (env) => {
         if (!env.stroke) return;
         setStrokes((prev) => upsert(prev, env.stroke!));
+        // Something new on the board while you're reading the chat: mark the
+        // tab so it isn't missed. Your own strokes never nudge you.
+        if (env.stroke.userId !== pairing.userId && activeTabRef.current !== 'board') {
+          setBoardNudge(true);
+        }
       }),
 
       socket.on('undo', (env) => {
@@ -138,6 +148,39 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         // could not re-open from the Love Code). Say so instead of retrying
         // forever behind a hopeful "Connecting…".
         if (env.code === 'room_not_found') setLost(true);
+      }),
+
+      // The partner tapped a sticker and is waiting for the same one back.
+      socket.on('nudge', (env) => {
+        if (!env.sticker || env.userId === pairing.userId) return;
+        setNudge({
+          phase: 'asking',
+          sticker: env.sticker,
+          label: env.label ?? '',
+          at: Date.now(),
+        });
+        playHeartChime();
+        buzz([16, 60, 16]);
+      }),
+
+      // Both of you sent it: the hug actually happens, on both screens at once.
+      socket.on('nudge_match', (env) => {
+        if (!env.sticker) return;
+        setNudge({
+          phase: 'match',
+          sticker: env.sticker,
+          label: env.label ?? '',
+          at: Date.now(),
+        });
+        playHeartChime();
+        buzz([20, 40, 20, 40, 40]);
+        activityRef.current = {
+          kind: 'nudge_match',
+          userId: env.userId ?? '',
+          text: `${env.label ?? '💞'} 💞`,
+          timestamp: env.timestamp ?? Date.now(),
+        };
+        void publishWidgetState();
       }),
 
       socket.on('miss_you', (env) => {
@@ -282,6 +325,39 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
     return sent;
   }
 
+  /**
+   * Sends a sticker as an invitation.
+   *
+   * Nothing is written to the conversation: a hug is a live thing between the
+   * two of you, not a line of history. If the partner sends the same sticker
+   * back within a few minutes, the server tells both sides at once and the
+   * match animation plays together.
+   */
+  function sendNudge(stickerId: string) {
+    unlockSound();
+    const sticker = stickerFor(stickerId);
+    const label = `${sticker.art} ${sticker.label}`;
+
+    const sent = socket.send({
+      type: 'nudge',
+      roomId: pairing.roomId,
+      userId: pairing.userId,
+      sticker: stickerId,
+      label,
+    });
+    if (!sent) return;
+
+    playSentBlip();
+    buzz(14);
+    // Answering an invitation shouldn't replace it with "waiting" — the match
+    // is about to arrive from the server and take over the screen.
+    setNudge((prev) =>
+      prev.phase === 'asking' && prev.sticker === stickerId
+        ? prev
+        : { phase: 'waiting', sticker: stickerId, label, at: Date.now() },
+    );
+  }
+
   function handleUndo() {
     // The server decides which stroke disappears and tells both sides.
     socket.send({ type: 'undo' });
@@ -342,9 +418,17 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
           </button>
           <button
             className={`tab-btn ${activeTab === 'board' ? 'active' : ''}`}
-            onClick={() => setActiveTab('board')}
+            onClick={() => {
+              setActiveTab('board');
+              setBoardNudge(false);
+            }}
           >
             Board
+            {boardNudge && (
+              <span className="board-dot" aria-label="New drawing">
+                ✏️
+              </span>
+            )}
           </button>
         </div>
 
@@ -464,7 +548,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
           loadingHistory={loadingHistory}
 
           onSendText={(text) => sendChat({ kind: 'text', text })}
-          onSendSticker={(sticker) => sendChat({ kind: 'sticker', sticker })}
+          onSendSticker={sendNudge}
           onSendImage={(key, mime, size, caption) =>
             sendChat({
               kind: 'image',
@@ -477,6 +561,12 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       )}
 
       <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
+
+      <NudgeOverlay
+        state={nudge}
+        onAnswer={sendNudge}
+        onDismiss={() => setNudge({ phase: 'idle' })}
+      />
 
       {settingsOpen && (
         <SettingsSheet

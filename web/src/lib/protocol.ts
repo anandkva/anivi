@@ -61,6 +61,7 @@ export type ClientMessageType =
   | 'miss_you'
   | 'chat'
   | 'chat_history'
+  | 'nudge'
   | 'ping'
   | 'pong';
 
@@ -69,6 +70,7 @@ export type ServerMessageType =
   | 'joined'
   | 'state'
   | 'presence'
+  | 'nudge_match'
   | 'error';
 
 export interface Envelope {
@@ -80,6 +82,9 @@ export interface Envelope {
   strokeId?: string;
   strokes?: Stroke[];
   activity?: Activity;
+  /** Nudges: the sticker's id, and the client's own wording for it. */
+  sticker?: string;
+  label?: string;
   chat?: ChatMessage;
   messages?: ChatMessage[];
   before?: number;
