@@ -97,17 +97,10 @@ func (s *Store) Upload(ctx context.Context, roomID, filename string, r io.Reader
 	if err != nil {
 		return "", "", 0, fmt.Errorf("media: read upload: %w", err)
 	}
-	if len(buf) == 0 {
-		return "", "", 0, errors.New("media: empty upload")
-	}
-	if len(buf) > MaxUploadBytes {
-		return "", "", 0, fmt.Errorf("media: image is larger than %d MB", MaxUploadBytes>>20)
-	}
 
-	mime = http.DetectContentType(buf)
-	ext, ok := allowedTypes[mime]
-	if !ok {
-		return "", "", 0, ErrUnsupportedType
+	mime, ext, err := inspect(buf)
+	if err != nil {
+		return "", "", 0, err
 	}
 
 	key = path.Join("rooms", roomID, fmt.Sprintf("%d-%s%s", time.Now().UnixMilli(), safeName(filename), ext))
@@ -139,6 +132,25 @@ func (s *Store) URL(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("media: presign: %w", err)
 	}
 	return req.URL, nil
+}
+
+// inspect decides whether these bytes may be stored, and as what.
+//
+// The client's declared content type is ignored entirely: it can claim
+// anything, so the bytes themselves are sniffed.
+func inspect(buf []byte) (mime, ext string, err error) {
+	if len(buf) == 0 {
+		return "", "", errors.New("media: empty upload")
+	}
+	if len(buf) > MaxUploadBytes {
+		return "", "", fmt.Errorf("media: image is larger than %d MB", MaxUploadBytes>>20)
+	}
+	mime = http.DetectContentType(buf)
+	ext, ok := allowedTypes[mime]
+	if !ok {
+		return "", "", ErrUnsupportedType
+	}
+	return mime, ext, nil
 }
 
 // safeName reduces a client-supplied filename to something harmless: the key

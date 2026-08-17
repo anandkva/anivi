@@ -366,6 +366,262 @@ body {
   transform: scale(1.12);
 }
 
+/* ---------- Chat ---------- */
+
+.chat-btn {
+  position: relative;
+  margin-left: auto;
+}
+
+.chat-btn + .icon-btn {
+  margin-left: 0;
+}
+
+.unread {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--pink-deep);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+}
+
+.chat-sheet {
+  height: 88vh;
+  gap: 10px;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+  /* Keep momentum scrolling inside the list on iOS. */
+  overscroll-behavior: contain;
+}
+
+.chat-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
+.chat-empty span {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.load-older {
+  align-self: center;
+  border: none;
+  background: rgba(255, 92, 138, 0.12);
+  color: var(--pink-deep);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bubble-row {
+  display: flex;
+}
+
+.bubble-row.mine {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 9px 13px;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bubble-row.mine .bubble {
+  background: linear-gradient(135deg, #ff7aa2, var(--pink-deep));
+  color: #fff;
+  border-bottom-right-radius: 6px;
+}
+
+.bubble-row.theirs .bubble {
+  border-bottom-left-radius: 6px;
+}
+
+/* An in-flight message is dimmed until the server confirms it. */
+.bubble.pending {
+  opacity: 0.65;
+}
+
+.bubble-text {
+  margin: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.bubble-time {
+  font-size: 11px;
+  opacity: 0.65;
+  align-self: flex-end;
+}
+
+/* Stickers are the message, so they get no bubble chrome. */
+.bubble-sticker {
+  background: none;
+  box-shadow: none;
+  align-items: center;
+  padding: 4px 8px;
+}
+
+.bubble-row.mine .bubble-sticker {
+  background: none;
+  color: inherit;
+}
+
+.bubble-art {
+  font-size: 56px;
+  line-height: 1.1;
+  animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.bubble-art-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pink-deep);
+}
+
+.bubble-image {
+  padding: 5px;
+}
+
+.bubble-photo {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 14px;
+  cursor: zoom-in;
+}
+
+.chat-error {
+  margin: 0;
+}
+
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 8px;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(255, 92, 138, 0.08);
+}
+
+.sticker-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 10px 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.sticker-tile:active {
+  transform: scale(0.95);
+}
+
+.sticker-art {
+  font-size: 30px;
+}
+
+.sticker-label {
+  font-size: 11px;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.chat-compose {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-input {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px; /* 16px stops iOS Safari zooming in on focus */
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--pink);
+}
+
+.send-btn {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border: none;
+  border-radius: 50%;
+  background: var(--pink);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.send-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 8, 16, 0.92);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+  padding: 20px;
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+}
+
 /* ---------- Miss You ---------- */
 
 .miss-overlay {
