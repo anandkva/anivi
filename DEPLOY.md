@@ -21,6 +21,56 @@ Two things still worth doing on your setup:
 2. **Keep it awake** (optional). The free instance sleeps after ~15 minutes;
    see the caveat below.
 
+### Chat and photos: environment variables
+
+Add these in Render → `anivi-server` → **Environment**. Both groups are
+optional and independent — the app runs without either.
+
+| Variable | Enables | Example |
+| --- | --- | --- |
+| `MONGODB_URI` | saved chat history + pairing that survives restarts | `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/anivi?retryWrites=true&w=majority` |
+| `MONGODB_DATABASE` | database name (default `anivi`) | `anivi` |
+| `AWS_REGION` | photo attachments | `ap-south-1` |
+| `AWS_BUCKET_NAME` | " | `your-bucket` |
+| `AWS_ACCESS_KEY_ID` | " | from an IAM user |
+| `AWS_SECRET_ACCESS_KEY` | " | from an IAM user |
+
+`GET /health` tells you what came up:
+
+```bash
+curl -s https://anivi-server.onrender.com/health
+```
+
+```json
+{ "status": "ok", "chat": true, "attachments": true, ... }
+```
+
+`chat: false` means Mongo didn't connect; `attachments: false` means the AWS
+variables are missing or wrong. The server logs the reason at startup.
+
+**MongoDB Atlas — allow Render to connect.** Atlas blocks unknown IPs by
+default, and a free Render instance has no fixed egress IP. Atlas → **Network
+Access** → **Add IP Address** → `0.0.0.0/0`. That is safe only because the
+connection still needs the database password — so give that user a strong one
+and limit it to the `anivi` database.
+
+**S3 bucket setup.** Keep **Block all public access ON**: Anivi never makes an
+object public, it signs a 6-hour read link each time a photo is displayed. The
+IAM user needs nothing more than this:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:PutObject", "s3:GetObject"],
+    "Resource": "arn:aws:s3:::YOUR_BUCKET/rooms/*"
+  }]
+}
+```
+
+Add a lifecycle rule if you want old photos to expire on their own.
+
 The rest of this document is the full walkthrough, useful if you redeploy
 somewhere else.
 

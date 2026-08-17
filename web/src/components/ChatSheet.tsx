@@ -9,7 +9,7 @@ interface Props {
   roomId: string;
   hasMore: boolean;
   loadingHistory: boolean;
-  onClose: () => void;
+
   onSendText: (text: string) => void;
   onSendSticker: (stickerId: string) => void;
   onSendImage: (key: string, mime: string, size: number, caption: string) => void;
@@ -23,7 +23,7 @@ export function ChatSheet({
   roomId,
   hasMore,
   loadingHistory,
-  onClose,
+
   onSendText,
   onSendSticker,
   onSendImage,
@@ -73,21 +73,8 @@ export function ChatSheet({
   }
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
-      <section
-        className="sheet chat-sheet"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Chat"
-      >
-        <div className="sheet-grabber" aria-hidden="true" />
-        <header className="chat-head">
-          <h2 className="sheet-title">Our chat</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Close chat">
-            ✕
-          </button>
-        </header>
-
+    <>
+      <section className="chat-view" aria-label="Chat">
         <div className="chat-list" ref={listRef}>
           {hasMore && (
             <button className="load-older" onClick={onLoadOlder} disabled={loadingHistory}>
@@ -190,7 +177,7 @@ export function ChatSheet({
           <img src={lightbox} alt="Shared photo" />
         </div>
       )}
-    </div>
+    </>
   );
 }
 

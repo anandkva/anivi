@@ -38,14 +38,14 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lost, setLost] = useState(false);
 
-  const [chatOpen, setChatOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'chat' | 'board'>('chat');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [unread, setUnread] = useState(0);
   // Read inside socket callbacks, which capture the first render's values.
-  const chatOpenRef = useRef(false);
-  chatOpenRef.current = chatOpen;
+  const activeTabRef = useRef<'chat' | 'board'>('chat');
+  activeTabRef.current = activeTab;
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>(PEN_COLORS[0]);
   const [width, setWidth] = useState(PEN_WIDTHS[1].value);
@@ -116,7 +116,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         setMessages((prev) => mergeMessage(prev, incoming));
 
         if (incoming.userId === pairing.userId) return; // our own echo
-        if (!chatOpenRef.current) setUnread((n) => n + 1);
+        if (activeTabRef.current !== 'chat') setUnread((n) => n + 1);
         // A "miss you" sticker deserves the same moment as the button.
         if (incoming.kind === 'sticker' && incoming.sticker === 'miss_you') {
           setMissKind('received');
@@ -165,6 +165,15 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
     // Reconnect only when the room itself changes, not on every pairing edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pairing.roomId]);
+
+  // Load chat history when switching to chat tab
+  useEffect(() => {
+    if (activeTab === 'chat') {
+      setUnread(0);
+      setLoadingHistory(true);
+      socket.send({ type: 'chat_history', limit: 40 });
+    }
+  }, [activeTab, socket]);
 
   // Coming back from the background: ask for a replay rather than trusting
   // whatever the tab was holding.
@@ -237,16 +246,6 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
     },
     [socket, pairing.roomId, pairing.userId, schedulePreview],
   );
-
-  function openChat() {
-    unlockSound();
-    setChatOpen(true);
-    setUnread(0);
-    // Ask for history each time the sheet opens: cheap, and it heals a client
-    // that was offline while the partner was talking.
-    setLoadingHistory(true);
-    socket.send({ type: 'chat_history', limit: 40 });
-  }
 
   function loadOlderMessages() {
     const oldest = messages[0];
@@ -333,25 +332,33 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   return (
     <div className="screen space">
       <header className="topbar">
-        <span className="brand">❤️ Anivi</span>
-        <span className={statusPill.className}>{statusPill.text}</span>
-        <button
-          className="icon-btn chat-btn"
-          onClick={openChat}
-          aria-label={unread > 0 ? `Chat, ${unread} unread` : 'Chat'}
-          title="Chat"
-        >
-          💬
-          {unread > 0 && <span className="unread">{unread > 9 ? '9+' : unread}</span>}
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => setSettingsOpen(true)}
-          aria-label="Settings"
-          title="Settings"
-        >
-          ⚙️
-        </button>
+        <div className="tab-control">
+          <button
+            className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveTab('chat')}
+          >
+            Chat
+            {unread > 0 && <span className="unread-tab">{unread > 9 ? '9+' : unread}</span>}
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'board' ? 'active' : ''}`}
+            onClick={() => setActiveTab('board')}
+          >
+            Board
+          </button>
+        </div>
+
+        <div className="topbar-actions">
+          <span className={statusPill.className}>{statusPill.text}</span>
+          <button
+            className="icon-btn settings-btn"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            title="Settings"
+          >
+            ⚙️
+          </button>
+        </div>
       </header>
 
       {lost && (
@@ -363,97 +370,99 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         </div>
       )}
 
-      <div className="canvas-wrap">
-        <Canvas
-          strokes={strokes}
-          tool={tool}
-          color={color}
-          width={width}
-          userId={pairing.userId}
-          onStroke={handleStroke}
-        />
-        {strokes.length === 0 && (
-          <p className="canvas-empty" aria-hidden="true">
-            Draw together ❤️
-          </p>
-        )}
-      </div>
-
-      <footer className="toolbar">
-        <div className="tool-row">
-          <button
-            className={`tool ${tool === 'pen' ? 'active' : ''}`}
-            onClick={() => setTool('pen')}
-            aria-pressed={tool === 'pen'}
-            title="Pen"
-          >
-            ✏️
-          </button>
-          <button
-            className={`tool ${tool === 'eraser' ? 'active' : ''}`}
-            onClick={() => setTool('eraser')}
-            aria-pressed={tool === 'eraser'}
-            title="Eraser"
-          >
-            🧹
-          </button>
-          <button className="tool" onClick={handleUndo} title="Undo">
-            ↩️
-          </button>
-          <button className="tool" onClick={handleClear} title="Clear the canvas">
-            🗑️
-          </button>
-
-          <div className="spacer" />
-
-          <div className="sizes" role="group" aria-label="Brush size">
-            {PEN_WIDTHS.map((w) => (
-              <button
-                key={w.label}
-                className={`size ${width === w.value ? 'active' : ''}`}
-                onClick={() => setWidth(w.value)}
-                aria-pressed={width === w.value}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="colors" role="group" aria-label="Pen colour">
-          {PEN_COLORS.map((c) => (
-            <button
-              key={c}
-              className={`swatch ${color === c && tool === 'pen' ? 'active' : ''}`}
-              style={{ background: c }}
-              onClick={() => {
-                setColor(c);
-                setTool('pen');
-              }}
-              aria-label={`Colour ${c}`}
-              aria-pressed={color === c}
+      {activeTab === 'board' && (
+        <>
+          <div className="canvas-wrap">
+            <Canvas
+              strokes={strokes}
+              tool={tool}
+              color={color}
+              width={width}
+              userId={pairing.userId}
+              onStroke={handleStroke}
             />
-          ))}
-        </div>
+            {strokes.length === 0 && (
+              <p className="canvas-empty" aria-hidden="true">
+                Draw together ❤️
+              </p>
+            )}
+          </div>
 
-        <button
-          className={`btn btn-miss ${sentHeart ? 'sending' : ''}`}
-          onClick={handleMissYou}
-        >
-          {sentHeart ? 'Sent ❤️' : 'Miss You ❤️'}
-        </button>
-      </footer>
+          <footer className="toolbar">
+            <div className="tool-row">
+              <button
+                className={`tool ${tool === 'pen' ? 'active' : ''}`}
+                onClick={() => setTool('pen')}
+                aria-pressed={tool === 'pen'}
+                title="Pen"
+              >
+                ✏️
+              </button>
+              <button
+                className={`tool ${tool === 'eraser' ? 'active' : ''}`}
+                onClick={() => setTool('eraser')}
+                aria-pressed={tool === 'eraser'}
+                title="Eraser"
+              >
+                🧹
+              </button>
+              <button className="tool" onClick={handleUndo} title="Undo">
+                ↩️
+              </button>
+              <button className="tool" onClick={handleClear} title="Clear the canvas">
+                🗑️
+              </button>
 
-      <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
+              <div className="spacer" />
 
-      {chatOpen && (
+              <div className="sizes" role="group" aria-label="Brush size">
+                {PEN_WIDTHS.map((w) => (
+                  <button
+                    key={w.label}
+                    className={`size ${width === w.value ? 'active' : ''}`}
+                    onClick={() => setWidth(w.value)}
+                    aria-pressed={width === w.value}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="colors" role="group" aria-label="Pen colour">
+              {PEN_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`swatch ${color === c && tool === 'pen' ? 'active' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => {
+                    setColor(c);
+                    setTool('pen');
+                  }}
+                  aria-label={`Colour ${c}`}
+                  aria-pressed={color === c}
+                />
+              ))}
+            </div>
+
+            <button
+              className={`btn btn-miss ${sentHeart ? 'sending' : ''}`}
+              onClick={handleMissYou}
+            >
+              {sentHeart ? 'Sent ❤️' : 'Miss You ❤️'}
+            </button>
+          </footer>
+        </>
+      )}
+
+      {activeTab === 'chat' && (
         <ChatSheet
           messages={messages}
           myUserId={pairing.userId}
           roomId={pairing.roomId}
           hasMore={hasMoreHistory}
           loadingHistory={loadingHistory}
-          onClose={() => setChatOpen(false)}
+
           onSendText={(text) => sendChat({ kind: 'text', text })}
           onSendSticker={(sticker) => sendChat({ kind: 'sticker', sticker })}
           onSendImage={(key, mime, size, caption) =>
@@ -466,6 +475,8 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
           onLoadOlder={loadOlderMessages}
         />
       )}
+
+      <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
 
       {settingsOpen && (
         <SettingsSheet

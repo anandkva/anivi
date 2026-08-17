@@ -366,36 +366,67 @@ body {
   transform: scale(1.12);
 }
 
-/* ---------- Chat ---------- */
+/* ---------- Tabs ---------- */
 
-.chat-btn {
+.tab-control {
+  display: flex;
+  background: rgba(255, 92, 138, 0.12);
+  border-radius: 999px;
+  padding: 4px;
+  margin: 0 auto;
+}
+
+.tab-btn {
   position: relative;
-  margin-left: auto;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.chat-btn + .icon-btn {
-  margin-left: 0;
+.tab-btn.active {
+  background: var(--surface);
+  color: var(--pink-deep);
+  box-shadow: 0 2px 6px rgba(226, 106, 143, 0.2);
 }
 
-.unread {
+.unread-tab {
   position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 17px;
-  height: 17px;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
   padding: 0 4px;
   border-radius: 999px;
   background: var(--pink-deep);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 17px;
+  line-height: 16px;
   text-align: center;
 }
 
-.chat-sheet {
-  height: 88vh;
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- Chat ---------- */
+
+.chat-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .chat-head {

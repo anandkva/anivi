@@ -42,7 +42,35 @@ round trip. Sending an explicit `join` afterwards is harmless and equivalent.
 | `clear` | — | Empties the canvas for both |
 | `sync` | — | Asks for a full `state` replay |
 | `miss_you` | — | Sends a heart (rate limited to one per 1.5s) |
+| `chat` | `chat` | Sends a message; stored and broadcast to both |
+| `chat_history` | `before`, `limit` | Asks for a page of past messages |
 | `ping` / `pong` | `timestamp` | Heartbeat |
+
+### Chat messages
+
+```json
+{
+  "type": "chat",
+  "chat": { "kind": "sticker", "sticker": "hug" }
+}
+```
+
+`kind` is `text`, `sticker` or `image`.
+
+- **text** — `text`, trimmed, capped at 2000 characters.
+- **sticker** — `sticker` is only a *name*: the artwork lives in the clients
+  (`web/src/lib/stickers.ts`), so the set can be restyled without touching
+  stored history, and an unknown name degrades to a heart.
+- **image** — `attachment.key`, from a prior upload. The key must start with
+  `rooms/<this room>/`, so a client cannot attach a photo from another couple's
+  space by guessing.
+
+The server always overwrites `id`, `userId`, `roomId` and `createdAt`, and
+echoes the message back to the sender as well, so both devices agree on one
+id and one timestamp rather than inventing their own.
+
+Attachments come back with a freshly signed `url` on every read; only the
+`key` is stored. That is why a photo shared months ago still opens.
 
 A stroke is **streamed while the finger is down**: the same `stroke.id` is
 re-sent every ~80ms with the points so far, so both the server and the partner
@@ -85,14 +113,30 @@ missed.
 | `GET`/`PUT` | `/api/room/{roomId}/preview` | The canvas image |
 | `GET`/`PUT` | `/api/room/{roomId}/card` | The composed widget card image |
 | `POST` | `/api/room/{roomId}/miss_you` | Send a heart without a socket (widgets) |
+| `GET` | `/api/room/{roomId}/messages?before=&limit=` | Chat history without a socket |
+| `POST` | `/api/room/{roomId}/attachments` | Upload one image (multipart, field `file`) |
 
 ## Rooms
 
 `map[roomID]*Room` behind a `sync.RWMutex`, plus a Love Code index. A room
 holds its strokes (capped at 3000), the last activity, and the two widget
-images. Rooms are memory-only: empty ones are reclaimed after 48 hours.
+images. That live state is memory-only: empty rooms are reclaimed after 48
+hours.
 
-If a room is gone but a client still has **both** its room id and Love Code,
-`join` re-opens the space empty rather than rejecting the couple — this is what
-keeps a pairing alive across a restart or a free-tier sleep. The drawing is
-lost; the pairing is not.
+If a room is gone from memory, `join` re-opens it — from the client's stored
+room id + Love Code, or from the `rooms` collection in MongoDB. Either way a
+restart or a free-tier sleep never forces a couple to pair again. The canvas
+is lost; the pairing and the whole conversation are not.
+
+## Storage
+
+| Where | What | Why |
+| --- | --- | --- |
+| Memory | strokes, presence, widget images | worthless once stale |
+| MongoDB `rooms` | roomId, loveCode, timestamps | pairing survives restarts |
+| MongoDB `messages` | every chat message, indexed `roomId + createdAt desc` | history is the point of chat |
+| S3 `rooms/<roomId>/…` | attachment bytes | images don't belong in a document store |
+
+Both are optional. Without `MONGODB_URI` chat is live-only; without the AWS
+variables photo sharing returns a clear "not set up" error. Neither failure
+touches drawing or Miss You.

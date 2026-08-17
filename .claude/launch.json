@@ -6,7 +6,11 @@
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "."],
       "cwd": "server",
-      "port": 8080
+      "port": 8080,
+      // Port 8080 is not negotiable in development: with VITE_WS_URL unset,
+      // the web app falls back to ws://<host>:8080/ws (web/src/lib/config.ts),
+      // so a reassigned port would leave the dev app unable to connect.
+      "autoPort": false
     },
     {
       "name": "anivi-web",

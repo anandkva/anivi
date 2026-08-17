@@ -3,9 +3,9 @@
 **A little space for us.**
 
 A private realtime space for two people: pair with a Love Code, draw together
-on one shared canvas, and send a **Miss You ❤️** that lands on your partner's
-screen instantly. No accounts, no chat, no feed — the pairing lives on your
-device.
+on one shared canvas, chat with stickers and photos, and send a
+**Miss You ❤️** that lands on your partner's screen instantly. No accounts, no
+feed — the pairing lives on your device.
 
 ```text
 Create Our Space  →  LOVE-7K3P9  →  partner joins  →  ❤️ connected
@@ -19,7 +19,10 @@ Create Our Space  →  LOVE-7K3P9  →  partner joins  →  ❤️ connected
 
 ```text
 anivi/
-├── server/        Go + WebSocket realtime backend (in-memory rooms)
+├── server/        Go + WebSocket backend
+│   ├── room/      live state: strokes, presence, widget images (memory)
+│   ├── store/     durable state: chat history + pairing (MongoDB)
+│   └── media/     image attachments (S3, private bucket)
 ├── web/           React + TypeScript + Vite PWA — the app itself
 ├── widgets/       Home Screen widget for iOS and Android, fed by the backend
 ├── PROTOCOL.md    The wire format every client shares
@@ -109,13 +112,30 @@ needs is `VITE_WS_URL`; nothing hardcodes a host.
 
 Step by step, including the free-tier gotchas: [DEPLOY.md](DEPLOY.md).
 
+## Chat
+
+Inside the space, **💬** opens the conversation: text, clipart stickers
+(Miss you, Hug you, Kiss, Good night…) and photos. History is saved per room in
+MongoDB, so it is there on every device the couple signs into with the same
+Love Code — and a "Miss you" sticker triggers the same hearts as the button.
+
+Photos go to S3. The bucket stays private: the server validates that the bytes
+really are an image, stores only the object key in the database, and signs a
+short-lived link each time a photo is shown. An old photo still opens because
+the link is new, not because it was left open.
+
+Both are optional. Without `MONGODB_URI` chat still works live but isn't
+saved; without the AWS keys photos are refused with a clear message. Neither
+can take drawing or Miss You down with it — see
+[`server/.env.example`](server/.env.example).
+
 ## Scope
 
-Built: private pairing, live shared canvas, Miss You, notification sound, PWA,
-widget snapshot pipeline, ping/pong heartbeat with automatic reconnect.
+Built: private pairing, live shared canvas, Miss You, chat with stickers and
+photos, notification sound, PWA, widget snapshot pipeline, ping/pong heartbeat
+with automatic reconnect.
 
-Deliberately not built: logins, chat, voice, video, payments, profiles, public
-rooms, analytics, a database. The realtime core is small and clean so
-persistence, push notifications and native widgets can be added later without
-rewriting it.
+Deliberately not built: logins, voice, video, payments, profiles, public rooms,
+analytics. The realtime core stays small so push notifications and native
+widgets can be added later without rewriting it.
 # anivi
