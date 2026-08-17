@@ -3,7 +3,10 @@
 # Two stages so the deployed image is a few MB: build with the Go toolchain,
 # ship a static binary on a minimal base.
 
-FROM golang:1.24-alpine AS build
+# Must be >= the `go` directive in go.mod. The official images set
+# GOTOOLCHAIN=local, so an older image will not quietly download a newer
+# toolchain the way a laptop does — it fails the build instead.
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # Dependencies first, so a code-only change reuses the module cache.
