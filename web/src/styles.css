@@ -1021,6 +1021,52 @@ body {
   }
 }
 
+.anim-heartbeat {
+  display: inline-block;
+  animation: heartbeat 2s ease-in-out infinite;
+}
+
+.anim-pulse {
+  display: inline-block;
+  animation: react-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes react-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.anim-wiggle {
+  display: inline-block;
+  animation: react-wiggle 2.5s ease-in-out infinite;
+}
+
+@keyframes react-wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg) scale(1.05); }
+  75% { transform: rotate(10deg) scale(1.05); }
+}
+
+.anim-float {
+  display: inline-block;
+  animation: react-float 3s ease-in-out infinite;
+}
+
+@keyframes react-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.anim-spin-slow {
+  display: inline-block;
+  animation: react-spin 8s linear infinite;
+}
+
+@keyframes react-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;

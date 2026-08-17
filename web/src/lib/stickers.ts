@@ -14,23 +14,17 @@ export interface Sticker {
   label: string;
   /** Tamil-English label, the way the couple would actually say it. */
   hint?: string;
+  /** CSS class to animate the sticker continuously */
+  animation?: string;
 }
 
 export const STICKERS: Sticker[] = [
-  { id: 'miss_you', art: '❤️', label: 'Miss you', hint: 'miss you da' },
-  { id: 'hug', art: '🤗', label: 'Hug you', hint: 'kattikko' },
-  { id: 'kiss', art: '😘', label: 'Kiss', hint: 'umma' },
-  { id: 'love', art: '💖', label: 'Love you', hint: 'love you da' },
-  { id: 'good_morning', art: '🌞', label: 'Good morning' },
-  { id: 'good_night', art: '🌙', label: 'Good night' },
-  { id: 'sorry', art: '🥺', label: 'Sorry' },
-  { id: 'thanks', art: '🙏', label: 'Thank you' },
-  { id: 'proud', art: '🎉', label: 'Proud of you' },
-  { id: 'coffee', art: '☕', label: 'Coffee?' },
-  { id: 'food', art: '🍜', label: 'Sapten?' },
-  { id: 'sleepy', art: '😴', label: 'Sleepy' },
-  { id: 'call_me', art: '📞', label: 'Call me' },
-  { id: 'waiting', art: '⏳', label: 'Waiting' },
+  { id: 'miss_you', art: '❤️', label: 'Miss You Paapu', animation: 'anim-heartbeat' },
+  { id: 'miss_you_pappa', art: '💕', label: 'Miss you Pappa', animation: 'anim-heartbeat' },
+  { id: 'love', art: '💖', label: 'Love you', animation: 'anim-pulse' },
+  { id: 'hug', art: '🤗', label: 'Hug You', animation: 'anim-wiggle' },
+  { id: 'kiss', art: '😘', label: 'Muththa', animation: 'anim-float' },
+  { id: 'good_morning', art: '🌞', label: 'Gummaning', animation: 'anim-spin-slow' },
 ];
 
 const BY_ID = new Map(STICKERS.map((s) => [s.id, s]));

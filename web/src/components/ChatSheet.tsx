@@ -120,7 +120,7 @@ export function ChatSheet({
                 }}
                 title={s.hint ?? s.label}
               >
-                <span className="sticker-art" aria-hidden="true">
+                <span className={`sticker-art ${s.animation || ''}`} aria-hidden="true">
                   {s.art}
                 </span>
                 <span className="sticker-label">{s.label}</span>
@@ -208,7 +208,7 @@ function Bubble({
       >
         {sticker && (
           <>
-            <span className="bubble-art" aria-hidden="true">
+            <span className={`bubble-art ${sticker.animation || ''}`} aria-hidden="true">
               {sticker.art}
             </span>
             <span className="bubble-art-label">{sticker.label}</span>
