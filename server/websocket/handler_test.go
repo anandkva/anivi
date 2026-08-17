@@ -8,18 +8,39 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
 	aniviws "github.com/anivi/server/websocket"
 	gws "github.com/gorilla/websocket"
 )
 
-func newTestServer(t *testing.T) (*room.Hub, string) {
+// newTestServer starts a socket server backed by a fake store. The store is not
+// optional any more: a join is authorized by connection membership, so without
+// one nobody can get into a room at all.
+func newTestServer(t *testing.T) (*room.Hub, *fakeStore, string) {
 	t.Helper()
 	hub := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, func(string) bool { return true }))
+	fake := newFakeStore()
+	srv := httptest.NewServer(aniviws.Handler(hub, fake, nil, nil, func(string) bool { return true }))
 	t.Cleanup(srv.Close)
-	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
+	return hub, fake, "ws" + strings.TrimPrefix(srv.URL, "http")
+}
+
+// openRoom allocates a room and the connection that lets its members in — the
+// pair of things POST /api/connections creates in production. Tests that only
+// need "a room two people share" call this and get both.
+func openRoom(t *testing.T, hub *room.Hub, fake *fakeStore, members ...string) *room.Room {
+	t.Helper()
+	if len(members) == 0 {
+		members = []string{"user_a", "user_b"}
+	}
+	rm, err := hub.Adopt(pairing.RoomID())
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	fake.connect(rm.ID, members...)
+	return rm
 }
 
 func dial(t *testing.T, url string) *gws.Conn {
@@ -66,19 +87,18 @@ func expect(t *testing.T, c *gws.Conn, want string) protocol.Envelope {
 }
 
 func TestTwoPartnersDrawAndMissEachOther(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
 	joined := expect(t, a, protocol.TypeJoined)
-	if joined.LoveCode != rm.LoveCode {
-		t.Fatalf("joined loveCode = %q, want %q", joined.LoveCode, rm.LoveCode)
+	if joined.RoomID != rm.ID {
+		t.Fatalf("joined room = %q, want %q", joined.RoomID, rm.ID)
 	}
 
-	// The partner joins with the Love Code rather than the room id.
 	b := dial(t, wsURL)
-	send(t, b, protocol.Envelope{Type: protocol.TypeJoin, LoveCode: strings.ToLower(rm.LoveCode), UserID: "user_b"})
+	send(t, b, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_b"})
 	joinedB := expect(t, b, protocol.TypeJoined)
 	if joinedB.RoomID != rm.ID {
 		t.Fatalf("partner joined room %q, want %q", joinedB.RoomID, rm.ID)
@@ -127,8 +147,8 @@ func TestTwoPartnersDrawAndMissEachOther(t *testing.T) {
 }
 
 func TestReconnectRestoresRoomState(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -153,8 +173,8 @@ func TestReconnectRestoresRoomState(t *testing.T) {
 }
 
 func TestUndoAndClearAreBroadcastToBoth(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -185,82 +205,89 @@ func TestUndoAndClearAreBroadcastToBoth(t *testing.T) {
 	}
 }
 
-// A restart wipes every room. A client that still holds its pairing must be
-// able to re-open the space instead of being told to pair again.
-func TestReclaimAfterServerRestart(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
-	roomID, loveCode := rm.ID, rm.LoveCode
+// A restart wipes every live room, but not the connections behind them. A
+// member must land back in their space instead of being told to connect again.
+func TestRoomIsReopenedForAMemberAfterRestart(t *testing.T) {
+	hub, fake, _ := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
-	// Stand in for a restart: a hub that has never heard of this room.
+	// Stand in for a restart: a hub that has never heard of this room, while the
+	// store still holds the connection.
 	fresh := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(fresh, nil, nil, func(string) bool { return true }))
+	srv := httptest.NewServer(aniviws.Handler(fresh, fake, nil, nil, func(string) bool { return true }))
 	defer srv.Close()
 	freshURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	c := dial(t, freshURL)
-	send(t, c, protocol.Envelope{
-		Type:     protocol.TypeJoin,
-		RoomID:   roomID,
-		LoveCode: loveCode,
-		UserID:   "user_a",
-	})
+	send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
 	joined := expect(t, c, protocol.TypeJoined)
-	if joined.RoomID != roomID || joined.LoveCode != loveCode {
-		t.Fatalf("reclaimed room = %q/%q, want %q/%q",
-			joined.RoomID, joined.LoveCode, roomID, loveCode)
+	if joined.RoomID != rm.ID {
+		t.Fatalf("re-opened room = %q, want %q", joined.RoomID, rm.ID)
 	}
-	// The partner can still reach the same space by Love Code alone.
-	if _, err := fresh.ByCode(loveCode); err != nil {
-		t.Fatalf("reclaimed room is not reachable by its Love Code: %v", err)
+	if _, err := fresh.ByID(rm.ID); err != nil {
+		t.Fatalf("re-opened room is not live on the fresh hub: %v", err)
 	}
-	_ = wsURL
 }
 
-func TestReclaimRejectsAMismatchedCode(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+// Knowing a room id is not permission to enter it. This is the whole reason
+// membership moved into the connection record.
+func TestJoinRejectsNonMembers(t *testing.T) {
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake, "user_a", "user_b")
 
-	fresh := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(fresh, nil, nil, func(string) bool { return true }))
-	defer srv.Close()
-	freshURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-
-	c := dial(t, freshURL)
-	send(t, c, protocol.Envelope{
-		Type:     protocol.TypeJoin,
-		RoomID:   rm.ID,
-		LoveCode: "LOVE-AAAAA",
-		UserID:   "user_a",
-	})
-	// A wrong code is fine here — it just opens a different empty room — but a
-	// malformed room id must never be accepted.
-	expect(t, c, protocol.TypeJoined)
-
-	c2 := dial(t, freshURL)
-	send(t, c2, protocol.Envelope{
-		Type:     protocol.TypeJoin,
-		RoomID:   "../../etc/passwd",
-		LoveCode: "LOVE-AAAAA",
-		UserID:   "user_b",
-	})
-	if e := expectAllowError(t, c2); e.Code != protocol.ErrRoomNotFound {
+	c := dial(t, wsURL)
+	send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_intruder"})
+	if e := expectAllowError(t, c); e.Code != protocol.ErrRoomNotFound {
 		t.Fatalf("error code = %q, want %q", e.Code, protocol.ErrRoomNotFound)
 	}
-	_ = wsURL
+	if got := rm.Online(); got != 0 {
+		t.Fatalf("room has %d online after a rejected join, want 0", got)
+	}
 }
 
-func TestJoinUnknownRoomFails(t *testing.T) {
-	_, wsURL := newTestServer(t)
+func TestJoinRejectsMalformedRoomIDs(t *testing.T) {
+	_, _, wsURL := newTestServer(t)
+	for _, id := range []string{"../../etc/passwd", "room_nope", "room_" + strings.Repeat("z", 40)} {
+		c := dial(t, wsURL)
+		send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: id, UserID: "user_a"})
+		if e := expectAllowError(t, c); e.Code != protocol.ErrRoomNotFound {
+			t.Fatalf("join %q: error code = %q, want %q", id, e.Code, protocol.ErrRoomNotFound)
+		}
+	}
+}
+
+// A join with no account cannot be authorized against anything.
+func TestJoinWithoutAnAccountIsRejected(t *testing.T) {
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
+
 	c := dial(t, wsURL)
-	send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: "room_nope"})
+	send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID})
+	if e := expectAllowError(t, c); e.Code != protocol.ErrUnauthorized {
+		t.Fatalf("error code = %q, want %q", e.Code, protocol.ErrUnauthorized)
+	}
+}
+
+// With no store at all there are no connections, so no join can be authorized.
+// Refusing is the safe answer; trusting the room id would be the unsafe one.
+func TestJoinIsRefusedWithoutAStore(t *testing.T) {
+	hub := room.NewHub()
+	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, nil, func(string) bool { return true }))
+	defer srv.Close()
+	rm, err := hub.Adopt(pairing.RoomID())
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+
+	c := dial(t, "ws"+strings.TrimPrefix(srv.URL, "http"))
+	send(t, c, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
 	if e := expectAllowError(t, c); e.Code != protocol.ErrRoomNotFound {
 		t.Fatalf("error code = %q, want %q", e.Code, protocol.ErrRoomNotFound)
 	}
 }
 
 func TestDrawBeforeJoinIsRejected(t *testing.T) {
-	_, wsURL := newTestServer(t)
+	_, _, wsURL := newTestServer(t)
 	c := dial(t, wsURL)
 	send(t, c, protocol.Envelope{Type: protocol.TypeDraw, Stroke: &protocol.Stroke{Points: []protocol.Point{{}}}})
 	if e := expectAllowError(t, c); e.Code != protocol.ErrNotJoined {
@@ -269,7 +296,7 @@ func TestDrawBeforeJoinIsRejected(t *testing.T) {
 }
 
 func TestApplicationPingIsAnswered(t *testing.T) {
-	_, wsURL := newTestServer(t)
+	_, _, wsURL := newTestServer(t)
 	c := dial(t, wsURL)
 	send(t, c, protocol.Envelope{Type: protocol.TypePing, Timestamp: time.Now().UnixMilli()})
 	expect(t, c, protocol.TypePong)
@@ -277,7 +304,7 @@ func TestApplicationPingIsAnswered(t *testing.T) {
 
 func TestOriginIsChecked(t *testing.T) {
 	hub := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, func(o string) bool { return o == "https://anivi.app" }))
+	srv := httptest.NewServer(aniviws.Handler(hub, nil, nil, nil, func(o string) bool { return o == "https://anivi.app" }))
 	defer srv.Close()
 	url := "ws" + strings.TrimPrefix(srv.URL, "http")
 

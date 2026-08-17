@@ -11,6 +11,7 @@ import (
 	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
+	"github.com/anivi/server/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -38,7 +39,14 @@ const (
 type Persister interface {
 	SaveMessage(ctx context.Context, msg protocol.ChatMessage) error
 	Messages(ctx context.Context, roomID string, before int64, limit int) ([]protocol.ChatMessage, bool, error)
-	SaveRoom(ctx context.Context, roomID, loveCode string) error
+}
+
+// ConnectionFinder resolves the connection a room belongs to, which is how a
+// join is authorized. It is separate from Persister because a Persister may
+// legitimately be absent (live-only chat) while this one being absent means
+// nobody can join anything.
+type ConnectionFinder interface {
+	ConnectionByRoom(ctx context.Context, roomID string) (store.ConnectionRecord, error)
 }
 
 // AttachmentLinker mints a readable URL for a stored attachment key.
@@ -48,30 +56,32 @@ type AttachmentLinker interface {
 
 // Client is one device's connection.
 type Client struct {
-	hub    *room.Hub
-	store  Persister
-	media  AttachmentLinker
-	conn   *websocket.Conn
-	send   chan []byte
-	connID string
-	userID string
-	room   *room.Room
-	closed chan struct{}
+	hub      *room.Hub
+	store    Persister
+	media    AttachmentLinker
+	notifier Notifier
+	conn     *websocket.Conn
+	send     chan []byte
+	connID   string
+	userID   string
+	room     *room.Room
+	closed   chan struct{}
 	// missYou throttles the Miss You button. Only readPump touches it.
 	missYou missYouGate
 	// lastNudge throttles sticker taps. Only readPump touches it.
 	lastNudge time.Time
 }
 
-func newClient(hub *room.Hub, store Persister, media AttachmentLinker, conn *websocket.Conn) *Client {
+func newClient(hub *room.Hub, store Persister, media AttachmentLinker, notifier Notifier, conn *websocket.Conn) *Client {
 	return &Client{
-		hub:    hub,
-		store:  store,
-		media:  media,
-		conn:   conn,
-		send:   make(chan []byte, sendBuffer),
-		connID: pairing.StrokeID(),
-		closed: make(chan struct{}),
+		hub:      hub,
+		store:    store,
+		media:    media,
+		notifier: notifier,
+		conn:     conn,
+		send:     make(chan []byte, sendBuffer),
+		connID:   pairing.StrokeID(),
+		closed:   make(chan struct{}),
 	}
 }
 

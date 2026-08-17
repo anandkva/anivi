@@ -10,8 +10,8 @@ import (
 // The point of a nudge: one tap asks, the same sticker coming back answers,
 // and both people are told at the same moment.
 func TestNudgeBecomesAMatchWhenItIsReturned(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -56,8 +56,8 @@ func TestNudgeBecomesAMatchWhenItIsReturned(t *testing.T) {
 
 // Tapping your own sticker twice is impatience, not a hug with yourself.
 func TestRepeatedNudgeFromSamePersonNeverMatches(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -83,8 +83,8 @@ func TestRepeatedNudgeFromSamePersonNeverMatches(t *testing.T) {
 
 // Different stickers are different invitations: a kiss does not answer a hug.
 func TestDifferentStickersDoNotMatchEachOther(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -107,8 +107,8 @@ func TestDifferentStickersDoNotMatchEachOther(t *testing.T) {
 }
 
 func TestNudgeIsRateLimitedAndValidated(t *testing.T) {
-	hub, wsURL := newTestServer(t)
-	rm := hub.Create()
+	hub, fake, wsURL := newTestServer(t)
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})

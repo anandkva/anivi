@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/anivi/server/media"
-	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
+	"github.com/anivi/server/push"
 	"github.com/anivi/server/room"
 	"github.com/anivi/server/store"
 	aniviws "github.com/anivi/server/websocket"
@@ -55,6 +55,20 @@ func main() {
 			db = nil
 		} else {
 			log.Printf("anivi: chat history enabled (database %q)", cfg.MongoDB)
+
+			// Encryption at rest is opt-in by key, but its absence is worth
+			// saying out loud: without it the conversation is readable to
+			// anyone who can read the database.
+			if cfg.MessageKey != "" {
+				cipher, cerr := store.NewCipher(cfg.MessageKey)
+				if cerr != nil {
+					log.Fatalf("anivi: ANIVI_MESSAGE_KEY is unusable: %v", cerr)
+				}
+				db.UseCipher(cipher)
+				log.Println("anivi: message content encrypted at rest")
+			} else {
+				log.Println("anivi: ANIVI_MESSAGE_KEY not set — messages are stored in plain text")
+			}
 			defer func() {
 				closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -85,6 +99,26 @@ func main() {
 		log.Println("anivi: AWS credentials not set, running without attachments")
 	}
 
+	// Notifications need both a push sender and somewhere to keep the
+	// subscriptions, so they ride on the database being up.
+	var pusher *push.Sender
+	if cfg.PushEnabled() && db != nil {
+		var err error
+		pusher, err = push.New(push.Config{
+			PublicKey:  cfg.VAPIDPublic,
+			PrivateKey: cfg.VAPIDPrivate,
+			Subject:    cfg.VAPIDSubject,
+		})
+		if err != nil {
+			log.Printf("anivi: push unavailable: %v", err)
+			pusher = nil
+		} else {
+			log.Println("anivi: push notifications enabled")
+		}
+	} else if !cfg.PushEnabled() {
+		log.Println("anivi: ANIVI_VAPID_* not set — no notifications when the app is closed")
+	}
+
 	// Typed nils would make the interfaces non-nil, so hand over an interface
 	// only when the dependency really exists.
 	var persister aniviws.Persister
@@ -96,11 +130,24 @@ func main() {
 		linker = files
 	}
 
-	api := &api{hub: hub, store: db, media: files}
+	var notify aniviws.Notifier
+	if pusher != nil && db != nil {
+		notify = &notifier{sender: pusher, store: db}
+	}
+
+	api := &api{hub: hub, store: db, media: files, push: pusher}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", api.health)
-	mux.HandleFunc("POST /api/pair/create", api.createPair)
-	mux.HandleFunc("POST /api/pair/join", api.joinPair)
+
+	// Accounts and connections: a name in, an Anivi Code out, and the
+	// relationships that code has been used to build.
+	mux.HandleFunc("POST /api/account", api.createAccount)
+	mux.HandleFunc("GET /api/me", api.me)
+	mux.HandleFunc("POST /api/signin", api.signIn)
+	mux.HandleFunc("POST /api/account/pin", api.resetPin)
+	mux.HandleFunc("PATCH /api/account", api.renameAccount)
+	mux.HandleFunc("POST /api/connections", api.createConnection)
+	mux.HandleFunc("DELETE /api/connections/{connectionId}", api.deleteConnection)
 	mux.HandleFunc("GET /api/room/{roomId}", api.roomState)
 	mux.HandleFunc("GET /api/room/{roomId}/preview", api.getImage(assetPreview))
 	mux.HandleFunc("PUT /api/room/{roomId}/preview", api.putImage(assetPreview))
@@ -109,7 +156,10 @@ func main() {
 	mux.HandleFunc("POST /api/room/{roomId}/miss_you", api.missYou)
 	mux.HandleFunc("GET /api/room/{roomId}/messages", api.messages)
 	mux.HandleFunc("POST /api/room/{roomId}/attachments", api.uploadAttachment)
-	mux.HandleFunc("/ws", aniviws.Handler(hub, persister, linker, originAllowed(origins)))
+	mux.HandleFunc("GET /api/push/key", api.pushKey)
+	mux.HandleFunc("POST /api/push/subscribe", api.subscribePush)
+	mux.HandleFunc("POST /api/push/unsubscribe", api.unsubscribePush)
+	mux.HandleFunc("/ws", aniviws.Handler(hub, persister, linker, notify, originAllowed(origins)))
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -140,17 +190,19 @@ type api struct {
 	hub   *room.Hub
 	store *store.Store
 	media *media.Store
+	push  *push.Sender
 }
 
 func (a *api) health(w http.ResponseWriter, r *http.Request) {
 	rooms, online := a.hub.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":      "ok",
-		"rooms":       rooms,
-		"online":      online,
-		"chat":        a.store != nil,
-		"attachments": a.media != nil,
-		"time":        time.Now().UnixMilli(),
+		"status":        "ok",
+		"rooms":         rooms,
+		"online":        online,
+		"chat":          a.store != nil,
+		"attachments":   a.media != nil,
+		"notifications": a.push != nil,
+		"time":          time.Now().UnixMilli(),
 	})
 }
 
@@ -238,44 +290,6 @@ func (a *api) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		"mime": mime,
 		"size": size,
 		"url":  url,
-	})
-}
-
-// createPair opens a new space. The caller keeps the returned ids locally;
-// there is nothing else to sign up for.
-func (a *api) createPair(w http.ResponseWriter, r *http.Request) {
-	rm := a.hub.Create()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"roomId":   rm.ID,
-		"loveCode": rm.LoveCode,
-		"userId":   pairing.UserID(),
-		"paired":   false,
-	})
-}
-
-func (a *api) joinPair(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		LoveCode string `json:"loveCode"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, protocol.ErrBadMessage, "could not read request")
-		return
-	}
-	code := pairing.NormalizeLoveCode(body.LoveCode)
-	if code == "" {
-		writeError(w, http.StatusBadRequest, protocol.ErrRoomNotFound, "that Love Code doesn't look right")
-		return
-	}
-	rm, err := a.hub.ByCode(code)
-	if err != nil {
-		writeError(w, http.StatusNotFound, protocol.ErrRoomNotFound, "no space with that Love Code")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"roomId":   rm.ID,
-		"loveCode": rm.LoveCode,
-		"userId":   pairing.UserID(),
-		"paired":   true,
 	})
 }
 
@@ -436,8 +450,9 @@ func withCORS(origins []string, next http.Handler) http.Handler {
 		if origin != "" && allowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			// Authorization carries the account's bearer id on every account call.
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.Header().Set("Access-Control-Max-Age", "600")
 		}
 		if r.Method == http.MethodOptions {

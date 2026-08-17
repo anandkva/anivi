@@ -1,6 +1,12 @@
 import { WS_URL } from './config';
 import type { Envelope, ServerMessageType } from './protocol';
-import type { Pairing } from './storage';
+
+/** Everything the socket needs to open and re-open a room. */
+export interface SocketSession {
+  roomId: string;
+  /** The account this device signed in as: membership is checked against it. */
+  userId: string;
+}
 
 export type ConnectionStatus = 'connecting' | 'online' | 'offline';
 
@@ -35,7 +41,7 @@ const WATCHDOG_MS = 10_000;
  */
 export class AniviSocket {
   private ws: WebSocket | null = null;
-  private pairing: Pairing | null = null;
+  private session: SocketSession | null = null;
   private listeners = new Map<string, Set<Listener>>();
   private statusListeners = new Set<(s: ConnectionStatus) => void>();
   private reconnectAttempts = 0;
@@ -45,8 +51,8 @@ export class AniviSocket {
   private closedByUs = false;
   private status: ConnectionStatus = 'offline';
 
-  connect(pairing: Pairing): void {
-    this.pairing = pairing;
+  connect(session: SocketSession): void {
+    this.session = session;
     this.closedByUs = false;
     this.startWatchdog();
     this.open();
@@ -95,7 +101,7 @@ export class AniviSocket {
 
   /** Forces an immediate reconnect, e.g. when the browser reports it is back online. */
   reconnectNow(): void {
-    if (this.closedByUs || !this.pairing) return;
+    if (this.closedByUs || !this.session) return;
     this.clearTimers();
     this.reconnectAttempts = 0;
     this.ws?.close();
@@ -103,13 +109,12 @@ export class AniviSocket {
   }
 
   private open(): void {
-    if (!this.pairing) return;
-    const { roomId, userId, loveCode } = this.pairing;
-    // The pairing rides along in the query string so the server can join the
-    // room during the upgrade — one less round trip on every reconnect.
-    const url = `${WS_URL}?roomId=${encodeURIComponent(roomId)}&userId=${encodeURIComponent(
-      userId,
-    )}&loveCode=${encodeURIComponent(loveCode)}`;
+    if (!this.session) return;
+    const { roomId, userId } = this.session;
+    // The session rides along in the query string so the server can check
+    // membership and join during the upgrade — one less round trip on every
+    // reconnect.
+    const url = `${WS_URL}?roomId=${encodeURIComponent(roomId)}&userId=${encodeURIComponent(userId)}`;
 
     // Never leave two sockets attached to the same room from one device.
     if (this.ws) {
@@ -135,7 +140,7 @@ export class AniviSocket {
       this.armSilenceTimer(ws);
       // Explicit join as well: harmless if the query string already did it,
       // and it covers a server that ignores the query parameters.
-      this.send({ type: 'join', roomId, userId, loveCode });
+      this.send({ type: 'join', roomId, userId });
     };
 
     ws.onmessage = (event) => {
@@ -193,7 +198,7 @@ export class AniviSocket {
   }
 
   private scheduleReconnect(): void {
-    if (this.closedByUs || !this.pairing || this.reconnectTimer !== null) return;
+    if (this.closedByUs || !this.session || this.reconnectTimer !== null) return;
     const backoff = Math.min(RECONNECT_MIN_MS * 2 ** this.reconnectAttempts, RECONNECT_MAX_MS);
     // Jitter keeps two reconnecting phones from syncing up on the same retry.
     const delay = backoff * (0.7 + Math.random() * 0.6);
@@ -211,7 +216,7 @@ export class AniviSocket {
   private startWatchdog(): void {
     if (this.watchdogTimer !== null) return;
     this.watchdogTimer = window.setInterval(() => {
-      if (this.closedByUs || !this.pairing) return;
+      if (this.closedByUs || !this.session) return;
 
       const live = this.ws !== null && this.ws.readyState === WebSocket.OPEN;
       if (live) return;

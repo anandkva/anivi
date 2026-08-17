@@ -20,6 +20,16 @@ type Config struct {
 	MongoURI string
 	MongoDB  string
 
+	// MessageKey (base64, 32 bytes) encrypts message content at rest, so a
+	// database dump does not read as a transcript. Empty stores plaintext.
+	MessageKey string
+
+	// VAPID keys enable Web Push. Without them the app still works; it just
+	// cannot reach a phone whose app is closed.
+	VAPIDPublic  string
+	VAPIDPrivate string
+	VAPIDSubject string
+
 	// S3 enables image attachments. Empty means attachments are refused with a
 	// clear message rather than failing halfway through an upload.
 	AWSRegion    string
@@ -39,6 +49,10 @@ func loadConfig() Config {
 		Port:             env("PORT", "8080"),
 		AllowedOrigins:   parseOrigins(env("ANIVI_ALLOWED_ORIGINS", "*")),
 		MongoURI:         os.Getenv("MONGODB_URI"),
+		MessageKey:       os.Getenv("ANIVI_MESSAGE_KEY"),
+		VAPIDPublic:      os.Getenv("ANIVI_VAPID_PUBLIC_KEY"),
+		VAPIDPrivate:     os.Getenv("ANIVI_VAPID_PRIVATE_KEY"),
+		VAPIDSubject:     os.Getenv("ANIVI_VAPID_SUBJECT"),
 		MongoDB:          env("MONGODB_DATABASE", "anivi"),
 		AWSRegion:        os.Getenv("AWS_REGION"),
 		AWSBucket:        os.Getenv("AWS_BUCKET_NAME"),
@@ -51,6 +65,9 @@ func loadConfig() Config {
 
 // StorageEnabled reports whether chat history can be persisted.
 func (c Config) StorageEnabled() bool { return c.MongoURI != "" }
+
+// PushEnabled reports whether notifications can be delivered.
+func (c Config) PushEnabled() bool { return c.VAPIDPublic != "" && c.VAPIDPrivate != "" }
 
 // MediaEnabled reports whether image attachments can be accepted.
 func (c Config) MediaEnabled() bool {

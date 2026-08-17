@@ -1,7 +1,6 @@
 // Package protocol defines the Anivi realtime wire format.
 //
-// The same shapes are mirrored in web/src/lib/protocol.ts, ios/Anivi/Protocol.swift
-// and android/Anivi/app/src/main/java/app/anivi/net/Protocol.kt. Keep them in sync.
+// The same shapes are mirrored in web/src/lib/protocol.ts. Keep them in sync.
 package protocol
 
 // Message types sent by clients.
@@ -45,6 +44,27 @@ const (
 	ToolPen    = "pen"
 	ToolEraser = "eraser"
 )
+
+// Relationships a connection can have. The label is mirrored: both people see
+// the same one, so a connection stores it once.
+//
+// This is the whole vocabulary the server knows. Which actions a relationship
+// offers — Hug, Cheers, Blessings — lives in the client, exactly as sticker art
+// already does, so the sets can be reworded without touching stored history.
+const (
+	RelationshipPartner = "partner"
+	RelationshipFriend  = "friend"
+	RelationshipFamily  = "family"
+)
+
+// ValidRelationship reports whether r is one Anivi understands.
+func ValidRelationship(r string) bool {
+	switch r {
+	case RelationshipPartner, RelationshipFriend, RelationshipFamily:
+		return true
+	}
+	return false
+}
 
 // Point is a canvas coordinate normalized to [0,1] so that every device
 // renders the same stroke regardless of screen size.
@@ -141,4 +161,12 @@ const (
 	ErrRoomNotFound = "room_not_found"
 	ErrNotJoined    = "not_joined"
 	ErrRateLimited  = "rate_limited"
+
+	// Account and connection errors.
+	ErrUnauthorized     = "unauthorized"
+	ErrAccountsDisabled = "accounts_disabled"
+	ErrUserNotFound     = "user_not_found"
+	ErrSelfConnect      = "self_connect"
+	ErrAlreadyConnected = "already_connected"
+	ErrBadRelationship  = "bad_relationship"
 )

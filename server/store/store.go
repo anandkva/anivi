@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/anivi/server/protocol"
@@ -33,10 +34,20 @@ const (
 
 // Store is a MongoDB-backed persistence layer.
 type Store struct {
-	client   *mongo.Client
-	rooms    *mongo.Collection
-	messages *mongo.Collection
+	client        *mongo.Client
+	rooms         *mongo.Collection
+	messages      *mongo.Collection
+	users         *mongo.Collection
+	connections   *mongo.Collection
+	subscriptions *mongo.Collection
+	// cipher encrypts message content at rest. Nil means the server was
+	// started without a key and messages are stored in the clear.
+	cipher *Cipher
 }
+
+// UseCipher turns on encryption of message content. Existing plaintext rows
+// stay readable: only new writes are encrypted.
+func (s *Store) UseCipher(c *Cipher) { s.cipher = c }
 
 // RoomRecord is the durable half of a room: enough to rebuild the pairing
 // after a restart. Strokes are deliberately not persisted — the canvas is a
@@ -66,9 +77,12 @@ func Connect(ctx context.Context, uri, database string) (*Store, error) {
 
 	db := client.Database(database)
 	s := &Store{
-		client:   client,
-		rooms:    db.Collection(roomsCollection),
-		messages: db.Collection(messagesCollection),
+		client:        client,
+		rooms:         db.Collection(roomsCollection),
+		messages:      db.Collection(messagesCollection),
+		users:         db.Collection(usersCollection),
+		connections:   db.Collection(connectionsCollection),
+		subscriptions: db.Collection(subscriptionsCollection),
 	}
 	if err := s.ensureIndexes(ctx); err != nil {
 		return nil, err
@@ -98,7 +112,11 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("store: message indexes: %w", err)
 	}
-	return nil
+
+	if err := s.ensureAccountIndexes(ctx); err != nil {
+		return err
+	}
+	return s.ensureSubscriptionIndexes(ctx)
 }
 
 // Close releases the connection.
@@ -150,6 +168,14 @@ func (s *Store) findRoom(ctx context.Context, filter bson.M) (RoomRecord, error)
 
 // SaveMessage appends a chat message to a room's history.
 func (s *Store) SaveMessage(ctx context.Context, msg protocol.ChatMessage) error {
+	// The text is the private part; ids, timestamps and sticker names are what
+	// the server needs to index and order the conversation.
+	sealed, err := s.cipher.Encrypt(msg.Text)
+	if err != nil {
+		return fmt.Errorf("store: encrypt message: %w", err)
+	}
+	msg.Text = sealed
+
 	if _, err := s.messages.InsertOne(ctx, msg); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			// A retry after a flaky write: the message is already stored.
@@ -194,9 +220,28 @@ func (s *Store) Messages(ctx context.Context, roomID string, before int64, limit
 	// Clients render oldest at the top.
 	msgs = make([]protocol.ChatMessage, 0, len(newestFirst))
 	for i := len(newestFirst) - 1; i >= 0; i-- {
-		msgs = append(msgs, newestFirst[i])
+		msgs = append(msgs, s.reveal(newestFirst[i]))
 	}
 	return msgs, hasMore, nil
+}
+
+// reveal decrypts a stored message for delivery.
+//
+// A row that cannot be decrypted — wrong key, or edited in the database — is
+// shown as a placeholder rather than dropped: losing a message silently would
+// be worse than saying one is unreadable.
+func (s *Store) reveal(msg protocol.ChatMessage) protocol.ChatMessage {
+	if msg.Text == "" {
+		return msg
+	}
+	text, err := s.cipher.Decrypt(msg.Text)
+	if err != nil {
+		log.Printf("anivi: message %s could not be decrypted: %v", msg.ID, err)
+		msg.Text = "🔒 unreadable on this server"
+		return msg
+	}
+	msg.Text = text
+	return msg
 }
 
 // MessageByID fetches a single message, used when serving an attachment.
@@ -209,5 +254,5 @@ func (s *Store) MessageByID(ctx context.Context, id string) (protocol.ChatMessag
 	if err != nil {
 		return protocol.ChatMessage{}, fmt.Errorf("store: message by id: %w", err)
 	}
-	return msg, nil
+	return s.reveal(msg), nil
 }

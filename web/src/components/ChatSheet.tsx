@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { uploadAttachment } from '../lib/api';
 import type { ChatMessage } from '../lib/protocol';
-import { STICKERS, stickerFor } from '../lib/stickers';
+import { actionsFor, stickerFor } from '../lib/stickers';
+import type { Relationship } from '../lib/account';
 
 interface Props {
   messages: ChatMessage[];
   myUserId: string;
   roomId: string;
+  /** Decides which virtual actions this space offers. */
+  relationship: Relationship;
   hasMore: boolean;
   loadingHistory: boolean;
 
@@ -21,6 +24,7 @@ export function ChatSheet({
   messages,
   myUserId,
   roomId,
+  relationship,
   hasMore,
   loadingHistory,
 
@@ -110,7 +114,7 @@ export function ChatSheet({
 
         {stickersOpen && (
           <div className="sticker-grid" role="group" aria-label="Stickers">
-            {STICKERS.map((s) => (
+            {actionsFor(relationship).map((s) => (
               <button
                 key={s.id}
                 className="sticker-tile"

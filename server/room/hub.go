@@ -50,9 +50,31 @@ func (h *Hub) Create() *Room {
 	return r
 }
 
-// roomIDPattern is the shape Create produces. Reclaim only accepts ids it
-// could have issued itself.
+// roomIDPattern is the shape Create produces. Reclaim and Adopt only accept ids
+// they could have issued themselves.
 var roomIDPattern = regexp.MustCompile(`^room_[a-z0-9]{16}$`)
+
+// Adopt opens the live room for a connection whose id was allocated elsewhere,
+// returning the existing one if it is already open.
+//
+// Unlike Reclaim there is no code to present. A connection room is not reachable
+// by guessing a code at all: the store says who its two members are, and the
+// socket checks that before it lets anyone in. So the room carries no Love Code,
+// and never enters the by-code index.
+func (h *Hub) Adopt(id string) (*Room, error) {
+	if !roomIDPattern.MatchString(id) {
+		return nil, ErrNotFound
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if r, ok := h.rooms[id]; ok {
+		return r, nil
+	}
+	r := newRoom(id, "")
+	h.rooms[id] = r
+	return r, nil
+}
 
 // Reclaim re-opens a room that the server no longer has.
 //
@@ -160,7 +182,10 @@ func (h *Hub) reap() {
 		r.mu.RUnlock()
 		if empty {
 			delete(h.rooms, id)
-			delete(h.byCode, r.LoveCode)
+			// Connection rooms carry no Love Code and were never indexed by one.
+			if r.LoveCode != "" {
+				delete(h.byCode, r.LoveCode)
+			}
 		}
 	}
 }

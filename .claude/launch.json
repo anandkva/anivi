@@ -17,7 +17,11 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "cwd": "web",
-      "port": 5173
+      "port": 5173,
+      // Vite pins 5173 in vite.config.ts, and the origin is what scopes the
+      // stored pairing in localStorage — a reassigned port would look like a
+      // brand new device with no Love Code.
+      "autoPort": false
     }
   ]
 }

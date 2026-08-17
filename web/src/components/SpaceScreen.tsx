@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './Canvas';
 import { ChatSheet } from './ChatSheet';
-import { MissYouOverlay, type MissYouKind } from './MissYouOverlay';
 import { NudgeOverlay, type NudgeState } from './NudgeOverlay';
 import { SettingsSheet } from './SettingsSheet';
-import { stickerFor } from '../lib/stickers';
-import { sendMissYouHttp } from '../lib/api';
 import { API_URL } from '../lib/config';
 import { publishPreview } from '../lib/preview';
 import { publishCard } from '../lib/widgetCard';
 import { PEN_COLORS, type Activity, type ChatMessage, type Stroke, type Tool } from '../lib/protocol';
 import { AniviSocket, type ConnectionStatus } from '../lib/socket';
+import { stickerFor } from '../lib/stickers';
 import { buzz, playHeartChime, playSentBlip, unlockSound } from '../lib/sound';
-import { savePairing, type Pairing } from '../lib/storage';
+import type { Account, Connection } from '../lib/account';
+import { alreadySubscribed, enablePush, pushState } from '../lib/notifications';
 
 /** The canvas snapshot is republished at most this often. */
 const PREVIEW_DEBOUNCE_MS = 2500;
@@ -23,20 +22,27 @@ const PEN_WIDTHS = [
   { label: 'L', value: 0.016 },
 ];
 
+const RELATIONSHIP_BADGE = {
+  partner: '❤️ Partner',
+  friend: '👥 Friend',
+  family: '🏠 Family',
+} as const;
+
 interface Props {
-  pairing: Pairing;
-  onPairingChange: (pairing: Pairing) => void;
-  onLeave: () => void;
+  account: Account;
+  connection: Connection;
+  onBack: () => void;
+  onDisconnected: () => void;
 }
 
-/** The shared space: live canvas, presence, and Miss You. */
-export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
+/**
+ * One shared space: chat, a board, and the virtual actions that belong to this
+ * relationship. Everything here is scoped to a single connection's room.
+ */
+export function SpaceScreen({ account, connection, onBack, onDisconnected }: Props) {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [online, setOnline] = useState(0);
-  const [missToken, setMissToken] = useState(0);
-  const [missKind, setMissKind] = useState<MissYouKind>('received');
-  const [sentHeart, setSentHeart] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lost, setLost] = useState(false);
 
@@ -45,20 +51,22 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [unread, setUnread] = useState(0);
-  /** Set when the partner draws while you are looking at the chat. */
   const [boardNudge, setBoardNudge] = useState(false);
   const [nudge, setNudge] = useState<NudgeState>({ phase: 'idle' });
-  // Read inside socket callbacks, which capture the first render's values.
-  const activeTabRef = useRef<'chat' | 'board'>('chat');
-  activeTabRef.current = activeTab;
+  // Asked for once, the first time this device sends something: permission
+  // prompts land better right after you did something than on arrival.
+  const [offerPush, setOfferPush] = useState(false);
+
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState<string>(PEN_COLORS[0]);
   const [width, setWidth] = useState(PEN_WIDTHS[1].value);
 
+  // Read inside socket callbacks, which capture the first render's values.
+  const activeTabRef = useRef<'chat' | 'board'>('chat');
+  activeTabRef.current = activeTab;
+
   const socketRef = useRef<AniviSocket | null>(null);
   const previewTimerRef = useRef<number | null>(null);
-  // Held in refs as well so the debounced widget upload always sees the newest
-  // canvas without re-arming the timer on every stroke.
   const strokesRef = useRef<Stroke[]>([]);
   strokesRef.current = strokes;
   const activityRef = useRef<Activity | null>(null);
@@ -68,26 +76,30 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   if (socketRef.current === null) socketRef.current = new AniviSocket();
   const socket = socketRef.current;
 
-  // One socket for the lifetime of the paired session.
+  const { roomId, relationship, peerName } = connection;
+
+  /**
+   * Publishes what the Home Screen widgets read: the bare canvas snapshot and
+   * the composed card. Widgets never connect to the socket.
+   */
+  const publishWidgetState = useCallback(async () => {
+    await Promise.all([
+      publishPreview(roomId, strokesRef.current),
+      publishCard(roomId, {
+        strokes: strokesRef.current,
+        activity: activityRef.current,
+        online: onlineRef.current,
+      }),
+    ]);
+  }, [roomId]);
+
+  // One socket for as long as this connection is open.
   useEffect(() => {
     const offs = [
       socket.onStatus(setStatus),
 
-      socket.on('joined', (env) => {
-        setOnline(env.online ?? 0);
-        // The server is the authority on the Love Code and on whether the
-        // partner has ever joined.
-        const next: Pairing = {
-          roomId: env.roomId ?? pairing.roomId,
-          loveCode: env.loveCode ?? pairing.loveCode,
-          userId: env.userId ?? pairing.userId,
-          paired: env.paired ?? pairing.paired,
-        };
-        savePairing(next);
-        onPairingChange(next);
-      }),
+      socket.on('joined', (env) => setOnline(env.online ?? 0)),
 
-      // A full replay: this is what makes a reconnect restore the canvas.
       socket.on('state', (env) => {
         setStrokes(env.strokes ?? []);
         setOnline(env.online ?? 0);
@@ -97,9 +109,8 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       socket.on('draw', (env) => {
         if (!env.stroke) return;
         setStrokes((prev) => upsert(prev, env.stroke!));
-        // Something new on the board while you're reading the chat: mark the
-        // tab so it isn't missed. Your own strokes never nudge you.
-        if (env.stroke.userId !== pairing.userId && activeTabRef.current !== 'board') {
+        // Something new on the board while you're reading the chat.
+        if (env.stroke.userId !== account.userId && activeTabRef.current !== 'board') {
           setBoardNudge(true);
         }
       }),
@@ -111,27 +122,14 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
       socket.on('clear', () => setStrokes([])),
 
-      socket.on('presence', (env) => {
-        setOnline(env.online ?? 0);
-        if (env.paired && !pairing.paired) {
-          const next = { ...pairing, paired: true };
-          savePairing(next);
-          onPairingChange(next);
-        }
-      }),
+      socket.on('presence', (env) => setOnline(env.online ?? 0)),
 
       socket.on('chat', (env) => {
         const incoming = env.chat;
         if (!incoming) return;
         setMessages((prev) => mergeMessage(prev, incoming));
-
-        if (incoming.userId === pairing.userId) return; // our own echo
+        if (incoming.userId === account.userId) return; // our own echo
         if (activeTabRef.current !== 'chat') setUnread((n) => n + 1);
-        // A "miss you" sticker deserves the same moment as the button.
-        if (incoming.kind === 'sticker' && incoming.sticker === 'miss_you') {
-          setMissKind('received');
-          setMissToken((t) => t + 1);
-        }
         playHeartChime();
         buzz(12);
       }),
@@ -143,35 +141,18 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         setMessages((prev) => page.reduce(mergeMessage, prev));
       }),
 
-      socket.on('error', (env) => {
-        // The stored pairing points at a space the server cannot open (and
-        // could not re-open from the Love Code). Say so instead of retrying
-        // forever behind a hopeful "Connecting…".
-        if (env.code === 'room_not_found') setLost(true);
-      }),
-
-      // The partner tapped a sticker and is waiting for the same one back.
+      // They sent an action and are waiting for the same one back.
       socket.on('nudge', (env) => {
-        if (!env.sticker || env.userId === pairing.userId) return;
-        setNudge({
-          phase: 'asking',
-          sticker: env.sticker,
-          label: env.label ?? '',
-          at: Date.now(),
-        });
+        if (!env.sticker || env.userId === account.userId) return;
+        setNudge({ phase: 'asking', sticker: env.sticker, label: env.label ?? '', at: Date.now() });
         playHeartChime();
         buzz([16, 60, 16]);
       }),
 
-      // Both of you sent it: the hug actually happens, on both screens at once.
+      // Both of you sent it: it happens, on both screens at once.
       socket.on('nudge_match', (env) => {
         if (!env.sticker) return;
-        setNudge({
-          phase: 'match',
-          sticker: env.sticker,
-          label: env.label ?? '',
-          at: Date.now(),
-        });
+        setNudge({ phase: 'match', sticker: env.sticker, label: env.label ?? '', at: Date.now() });
         playHeartChime();
         buzz([20, 40, 20, 40, 40]);
         activityRef.current = {
@@ -183,43 +164,30 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         void publishWidgetState();
       }),
 
-      socket.on('miss_you', (env) => {
-        setMissKind('received');
-        setMissToken((t) => t + 1);
-        activityRef.current = env.activity ?? {
-          kind: 'miss_you',
-          userId: env.userId ?? '',
-          text: 'They miss you ❤️',
-          timestamp: env.timestamp ?? Date.now(),
-        };
-        playHeartChime();
-        buzz();
-        // Refresh the Home Screen card right away: a heart is exactly what
-        // the widget exists to show.
-        void publishWidgetState();
+      socket.on('error', (env) => {
+        // This device is no longer a member — the other person removed the
+        // connection, or it was deleted elsewhere.
+        if (env.code === 'room_not_found' || env.code === 'unauthorized') setLost(true);
       }),
     ];
 
-    socket.connect(pairing);
+    socket.connect({ roomId, userId: account.userId });
     return () => {
       for (const off of offs) off();
       socket.disconnect();
     };
-    // Reconnect only when the room itself changes, not on every pairing edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairing.roomId]);
+  }, [roomId, account.userId]);
 
-  // Load chat history when switching to chat tab
+  // Ask for history whenever the chat comes to the front: cheap, and it heals
+  // a client that was away while the other person was talking.
   useEffect(() => {
-    if (activeTab === 'chat') {
-      setUnread(0);
-      setLoadingHistory(true);
-      socket.send({ type: 'chat_history', limit: 40 });
-    }
+    if (activeTab !== 'chat') return;
+    setUnread(0);
+    setLoadingHistory(true);
+    socket.send({ type: 'chat_history', limit: 40 });
   }, [activeTab, socket]);
 
-  // Coming back from the background: ask for a replay rather than trusting
-  // whatever the tab was holding.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') socket.requestSync();
@@ -240,39 +208,16 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   }, []);
 
   // The service worker cannot read localStorage, so hand it the room id it
-  // needs to fill in a PWA widget (Windows 11's widget board today).
+  // needs to fill in a PWA widget.
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.ready
-      .then((reg) =>
-        reg.active?.postMessage({
-          type: 'anivi:pairing',
-          roomId: pairing.roomId,
-          apiBase: API_URL,
-        }),
-      )
+      .then((reg) => reg.active?.postMessage({ type: 'anivi:pairing', roomId, apiBase: API_URL }))
       .catch(() => {
-        /* no worker in dev, nothing to mirror */
+        /* no worker in dev */
       });
-  }, [pairing.roomId]);
+  }, [roomId]);
 
-  /**
-   * Publishes what the Home Screen widgets read: the bare canvas snapshot and
-   * the composed card. Widgets never connect to the socket — they show the
-   * latest image the open app left for them.
-   */
-  const publishWidgetState = useCallback(async () => {
-    await Promise.all([
-      publishPreview(pairing.roomId, strokesRef.current),
-      publishCard(pairing.roomId, {
-        strokes: strokesRef.current,
-        activity: activityRef.current,
-        online: onlineRef.current,
-      }),
-    ]);
-  }, [pairing.roomId]);
-
-  /** Regenerates the widget images a moment after the drawing settles. */
   const schedulePreview = useCallback(() => {
     if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(() => {
@@ -284,11 +229,27 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   const handleStroke = useCallback(
     (stroke: Stroke, done: boolean) => {
       setStrokes((prev) => upsert(prev, stroke));
-      socket.send({ type: 'draw', roomId: pairing.roomId, userId: pairing.userId, stroke });
+      socket.send({ type: 'draw', roomId, userId: account.userId, stroke });
       if (done) schedulePreview();
     },
-    [socket, pairing.roomId, pairing.userId, schedulePreview],
+    [socket, roomId, account.userId, schedulePreview],
   );
+
+  /**
+   * Offers notifications after the first thing this device sends.
+   *
+   * Asking on launch gets refused; asking once someone has actually written to
+   * their person is the moment it makes sense.
+   */
+  function maybeOfferPush() {
+    if (alreadySubscribed() || pushState() !== 'default') return;
+    setOfferPush(true);
+  }
+
+  async function acceptPush() {
+    setOfferPush(false);
+    await enablePush(account.userId);
+  }
 
   function loadOlderMessages() {
     const oldest = messages[0];
@@ -298,12 +259,10 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   }
 
   function sendChat(chat: Partial<ChatMessage> & { kind: ChatMessage['kind'] }) {
-    // The server assigns the real id and timestamp and echoes the message
-    // back; until then this local copy keeps the conversation responsive.
     const optimistic: ChatMessage = {
       id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      roomId: pairing.roomId,
-      userId: pairing.userId,
+      roomId,
+      userId: account.userId,
       kind: chat.kind,
       text: chat.text,
       sticker: chat.sticker,
@@ -315,42 +274,29 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
     const sent = socket.send({
       type: 'chat',
-      roomId: pairing.roomId,
+      roomId,
       chat: { ...optimistic, pending: undefined } as ChatMessage,
     });
-    if (!sent) {
-      // Offline: drop the optimistic bubble rather than pretend it was sent.
-      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-    }
+    if (!sent) setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+    else maybeOfferPush();
     return sent;
   }
 
   /**
-   * Sends a sticker as an invitation.
-   *
-   * Nothing is written to the conversation: a hug is a live thing between the
-   * two of you, not a line of history. If the partner sends the same sticker
-   * back within a few minutes, the server tells both sides at once and the
-   * match animation plays together.
+   * Sends an action as an invitation rather than a message. Nothing is written
+   * to the conversation: if the other person sends the same one back, the
+   * server tells both sides at once and it happens together.
    */
   function sendNudge(stickerId: string) {
     unlockSound();
     const sticker = stickerFor(stickerId);
     const label = `${sticker.art} ${sticker.label}`;
 
-    const sent = socket.send({
-      type: 'nudge',
-      roomId: pairing.roomId,
-      userId: pairing.userId,
-      sticker: stickerId,
-      label,
-    });
-    if (!sent) return;
-
+    if (!socket.send({ type: 'nudge', roomId, userId: account.userId, sticker: stickerId, label })) {
+      return;
+    }
     playSentBlip();
     buzz(14);
-    // Answering an invitation shouldn't replace it with "waiting" — the match
-    // is about to arrive from the server and take over the screen.
     setNudge((prev) =>
       prev.phase === 'asking' && prev.sticker === stickerId
         ? prev
@@ -359,7 +305,6 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   }
 
   function handleUndo() {
-    // The server decides which stroke disappears and tells both sides.
     socket.send({ type: 'undo' });
     schedulePreview();
   }
@@ -367,33 +312,6 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   function handleClear() {
     socket.send({ type: 'clear' });
     schedulePreview();
-  }
-
-  async function handleMissYou() {
-    unlockSound();
-    // Sending should feel like something happened on this side too — a haptic
-    // tap, its own sound, and hearts rising off the button.
-    buzz([14, 30, 14]);
-    playSentBlip();
-    setMissKind('sent');
-    setMissToken((t) => t + 1);
-    setSentHeart(true);
-    window.setTimeout(() => setSentHeart(false), 1600);
-
-    if (!socket.send({ type: 'miss_you', roomId: pairing.roomId, userId: pairing.userId })) {
-      // Socket down: the heart still goes out over HTTP.
-      await sendMissYouHttp(pairing.roomId, pairing.userId);
-    }
-
-    // Update the card from this side too, so the heart reaches the partner's
-    // Home Screen even if their app never opens.
-    activityRef.current = {
-      kind: 'miss_you',
-      userId: pairing.userId,
-      text: 'They miss you ❤️',
-      timestamp: Date.now(),
-    };
-    await publishWidgetState();
   }
 
   const statusPill = useMemo(() => {
@@ -408,48 +326,28 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
   return (
     <div className="screen space">
       <header className="topbar">
-        <div className="tab-control">
-          <button
-            className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
-            onClick={() => setActiveTab('chat')}
-          >
-            Chat
-            {unread > 0 && <span className="unread-tab">{unread > 9 ? '9+' : unread}</span>}
-          </button>
-          <button
-            className={`tab-btn ${activeTab === 'board' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('board');
-              setBoardNudge(false);
-            }}
-          >
-            Board
-            {boardNudge && (
-              <span className="board-dot" aria-label="New drawing">
-                ✏️
-              </span>
-            )}
-          </button>
+        <button className="back-btn" onClick={onBack} aria-label="Back to connections">
+          ‹
+        </button>
+        <div className="space-who">
+          <span className="space-name">{peerName}</span>
+          <span className="space-rel">{RELATIONSHIP_BADGE[relationship] ?? relationship}</span>
         </div>
-
-        <div className="topbar-actions">
-          <span className={statusPill.className}>{statusPill.text}</span>
-          <button
-            className="icon-btn settings-btn"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Settings"
-            title="Settings"
-          >
-            ⚙️
-          </button>
-        </div>
+        <span className={statusPill.className}>{statusPill.text}</span>
+        <button
+          className="icon-btn settings-btn"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+        >
+          ⚙️
+        </button>
       </header>
 
       {lost && (
         <div className="lost-banner" role="alert">
           <span>This space isn&rsquo;t available any more.</span>
-          <button className="btn-inline" onClick={onLeave}>
-            Start a new one ❤️
+          <button className="btn-inline" onClick={onDisconnected}>
+            Back to connections
           </button>
         </div>
       )}
@@ -462,7 +360,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
               tool={tool}
               color={color}
               width={width}
-              userId={pairing.userId}
+              userId={account.userId}
               onStroke={handleStroke}
             />
             {strokes.length === 0 && (
@@ -493,7 +391,7 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
               <button className="tool" onClick={handleUndo} title="Undo">
                 ↩️
               </button>
-              <button className="tool" onClick={handleClear} title="Clear the canvas">
+              <button className="tool" onClick={handleClear} title="Clear the board">
                 🗑️
               </button>
 
@@ -529,12 +427,6 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
               ))}
             </div>
 
-            <button
-              className={`btn btn-miss ${sentHeart ? 'sending' : ''}`}
-              onClick={handleMissYou}
-            >
-              {sentHeart ? 'Sent ❤️' : 'Miss You ❤️'}
-            </button>
           </footer>
         </>
       )}
@@ -542,11 +434,11 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
       {activeTab === 'chat' && (
         <ChatSheet
           messages={messages}
-          myUserId={pairing.userId}
-          roomId={pairing.roomId}
+          myUserId={account.userId}
+          roomId={roomId}
+          relationship={relationship}
           hasMore={hasMoreHistory}
           loadingHistory={loadingHistory}
-
           onSendText={(text) => sendChat({ kind: 'text', text })}
           onSendSticker={sendNudge}
           onSendImage={(key, mime, size, caption) =>
@@ -560,7 +452,53 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
         />
       )}
 
-      <MissYouOverlay token={missToken} kind={missKind} onDone={() => setMissToken(0)} />
+      <nav className="bottom-nav" aria-label="Sections">
+        <button
+          className={`nav-btn ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => setActiveTab('chat')}
+          aria-current={activeTab === 'chat'}
+        >
+          <span aria-hidden="true">💬</span>
+          Chat
+          {unread > 0 && <span className="unread-tab">{unread > 9 ? '9+' : unread}</span>}
+        </button>
+        <button
+          className={`nav-btn ${activeTab === 'board' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('board');
+            setBoardNudge(false);
+          }}
+          aria-current={activeTab === 'board'}
+        >
+          <span aria-hidden="true">🎨</span>
+          Board
+          {boardNudge && (
+            <span className="board-dot" aria-label="New drawing">
+              ✏️
+            </span>
+          )}
+        </button>
+      </nav>
+
+      {offerPush && (
+        <div className="push-offer" role="dialog" aria-label="Notifications">
+          <span className="push-offer-art" aria-hidden="true">
+            🔔
+          </span>
+          <div className="push-offer-body">
+            <p className="push-offer-title">Get notified?</p>
+            <p className="push-offer-sub">
+              So you know when {peerName} writes, even with Anivi closed.
+            </p>
+          </div>
+          <button className="nudge-answer" onClick={acceptPush}>
+            Turn on
+          </button>
+          <button className="nudge-close" onClick={() => setOfferPush(false)} aria-label="Not now">
+            ✕
+          </button>
+        </div>
+      )}
 
       <NudgeOverlay
         state={nudge}
@@ -570,10 +508,11 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
       {settingsOpen && (
         <SettingsSheet
-          pairing={pairing}
+          account={account}
+          connection={connection}
           online={online}
           onClose={() => setSettingsOpen(false)}
-          onLeave={onLeave}
+          onDisconnected={onDisconnected}
         />
       )}
     </div>
@@ -582,11 +521,8 @@ export function SpaceScreen({ pairing, onPairingChange, onLeave }: Props) {
 
 /**
  * Adds a message to the conversation, keeping it ordered and free of
- * duplicates.
- *
- * The server echoes every message back with its authoritative id, so an
- * optimistic local bubble has to be recognised and replaced — otherwise you'd
- * see everything you send twice.
+ * duplicates. The server echoes every message back with its authoritative id,
+ * so an optimistic local bubble has to be recognised and replaced.
  */
 function mergeMessage(prev: ChatMessage[], msg: ChatMessage): ChatMessage[] {
   const byId = prev.findIndex((m) => m.id === msg.id);
@@ -612,8 +548,6 @@ function mergeMessage(prev: ChatMessage[], msg: ChatMessage): ChatMessage[] {
     return next;
   }
 
-  // History pages arrive oldest-first and out of band with live messages, so
-  // insert by time rather than appending blindly.
   const next = [...prev, msg];
   next.sort((a, b) => a.createdAt - b.createdAt);
   return next;

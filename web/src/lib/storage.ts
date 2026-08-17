@@ -1,49 +1,83 @@
+import type { Account } from './account';
+
 /**
- * Local persistence of the pairing.
+ * Local persistence.
  *
- * This is the whole "account system": once a couple is paired, the ids live in
- * localStorage and Anivi reconnects to the same room on every launch. Leaving
- * the space is the only way to clear it.
+ * Only the account is stored: the connections list is authoritative on the
+ * server and fetched on launch, so a phone that connected to someone new sees
+ * them everywhere. Signing out is the only way to clear this.
  */
 
-const KEY = 'anivi.pairing.v1';
+const KEY = 'anivi.account.v2';
+const LEGACY_PAIRING_KEY = 'anivi.pairing.v1';
 
-export interface Pairing {
-  roomId: string;
-  loveCode: string;
-  userId: string;
-  paired: boolean;
-}
-
-export function loadPairing(): Pairing | null {
+export function loadAccount(): Account | null {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Pairing>;
-    if (!parsed.roomId || !parsed.userId) return null;
+    const parsed = JSON.parse(raw) as Partial<Account>;
+    if (!parsed.userId || !parsed.aniviCode) return null;
     return {
-      roomId: parsed.roomId,
-      loveCode: parsed.loveCode ?? '',
       userId: parsed.userId,
-      paired: Boolean(parsed.paired),
+      aniviCode: parsed.aniviCode,
+      name: parsed.name ?? '',
+      createdAt: parsed.createdAt ?? 0,
     };
   } catch {
-    // A corrupt entry should not brick the app; treat it as unpaired.
+    // A corrupt entry should not brick the app; treat it as signed out.
     return null;
   }
 }
 
-export function savePairing(pairing: Pairing): void {
+export function saveAccount(account: Account): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(pairing));
+    localStorage.setItem(KEY, JSON.stringify(account));
   } catch {
-    // Private mode with no quota: the session still works, it just won't survive a reload.
+    // Private mode with no quota: the session works, it just won't survive a reload.
   }
 }
 
-export function clearPairing(): void {
+export function clearAccount(): void {
   try {
     localStorage.removeItem(KEY);
+    localStorage.removeItem(LEGACY_PAIRING_KEY);
+  } catch {
+    /* nothing to do */
+  }
+}
+
+/**
+ * Removes the old Love-Code pairing left by earlier versions.
+ *
+ * There is nothing to migrate — a pairing was a room without an account behind
+ * it, and the server no longer opens rooms that way — so the honest move is to
+ * clear it and let the person create an account.
+ */
+export function dropLegacyPairing(): boolean {
+  try {
+    if (!localStorage.getItem(LEGACY_PAIRING_KEY)) return false;
+    localStorage.removeItem(LEGACY_PAIRING_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers which connection was open, so relaunching lands back in it. */
+const LAST_CONNECTION_KEY = 'anivi.lastConnection.v1';
+
+export function loadLastConnectionId(): string {
+  try {
+    return localStorage.getItem(LAST_CONNECTION_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function saveLastConnectionId(connectionId: string): void {
+  try {
+    if (connectionId) localStorage.setItem(LAST_CONNECTION_KEY, connectionId);
+    else localStorage.removeItem(LAST_CONNECTION_KEY);
   } catch {
     /* nothing to do */
   }

@@ -10,18 +10,46 @@ import (
 
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
+	"github.com/anivi/server/store"
 	aniviws "github.com/anivi/server/websocket"
 )
 
-// fakeStore stands in for MongoDB so the chat rules can be tested without one.
+// fakeStore stands in for MongoDB so the chat and join rules can be tested
+// without one. It answers ConnectionByRoom as well as the chat methods, because
+// a join is now authorized by connection membership rather than by knowing a
+// room id.
 type fakeStore struct {
-	mu       sync.Mutex
-	saved    []protocol.ChatMessage
-	rooms    map[string]string // roomID -> loveCode
-	failNext bool
+	mu          sync.Mutex
+	saved       []protocol.ChatMessage
+	connections map[string]store.ConnectionRecord // roomID -> connection
+	failNext    bool
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{rooms: map[string]string{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{connections: map[string]store.ConnectionRecord{}}
+}
+
+// connect records the people allowed into roomID.
+func (f *fakeStore) connect(roomID string, members ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connections[roomID] = store.ConnectionRecord{
+		ConnectionID: "conn_" + roomID,
+		RoomID:       roomID,
+		Members:      members,
+		Relationship: protocol.RelationshipPartner,
+	}
+}
+
+func (f *fakeStore) ConnectionByRoom(_ context.Context, roomID string) (store.ConnectionRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec, ok := f.connections[roomID]
+	if !ok {
+		return store.ConnectionRecord{}, store.ErrNotFound
+	}
+	return rec, nil
+}
 
 func (f *fakeStore) SaveMessage(_ context.Context, msg protocol.ChatMessage) error {
 	f.mu.Lock()
@@ -44,13 +72,6 @@ func (f *fakeStore) Messages(_ context.Context, roomID string, before int64, lim
 		out, hasMore = out[len(out)-limit:], true
 	}
 	return out, hasMore, nil
-}
-
-func (f *fakeStore) SaveRoom(_ context.Context, roomID, loveCode string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.rooms[roomID] = loveCode
-	return nil
 }
 
 func (f *fakeStore) count() int {
@@ -78,7 +99,7 @@ func (fakeMedia) URL(_ context.Context, key string) (string, error) {
 func newChatServer(t *testing.T, st aniviws.Persister) (*room.Hub, string) {
 	t.Helper()
 	hub := room.NewHub()
-	srv := httptest.NewServer(aniviws.Handler(hub, st, fakeMedia{}, func(string) bool { return true }))
+	srv := httptest.NewServer(aniviws.Handler(hub, st, fakeMedia{}, nil, func(string) bool { return true }))
 	t.Cleanup(srv.Close)
 	return hub, "ws" + strings.TrimPrefix(srv.URL, "http")
 }
@@ -86,7 +107,7 @@ func newChatServer(t *testing.T, st aniviws.Persister) (*room.Hub, string) {
 func TestChatReachesPartnerAndIsStored(t *testing.T) {
 	fake := newFakeStore()
 	hub, wsURL := newChatServer(t, fake)
-	rm := hub.Create()
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -134,7 +155,7 @@ func TestChatReachesPartnerAndIsStored(t *testing.T) {
 func TestStickerAndImageMessages(t *testing.T) {
 	fake := newFakeStore()
 	hub, wsURL := newChatServer(t, fake)
-	rm := hub.Create()
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -181,8 +202,8 @@ func TestStickerAndImageMessages(t *testing.T) {
 func TestImageFromAnotherRoomIsRejected(t *testing.T) {
 	fake := newFakeStore()
 	hub, wsURL := newChatServer(t, fake)
-	mine := hub.Create()
-	theirs := hub.Create()
+	mine := openRoom(t, hub, fake)
+	theirs := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: mine.ID, UserID: "user_a"})
@@ -206,7 +227,7 @@ func TestImageFromAnotherRoomIsRejected(t *testing.T) {
 func TestEmptyAndUnknownChatKindsAreRejected(t *testing.T) {
 	fake := newFakeStore()
 	hub, wsURL := newChatServer(t, fake)
-	rm := hub.Create()
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -232,7 +253,7 @@ func TestEmptyAndUnknownChatKindsAreRejected(t *testing.T) {
 func TestChatHistoryIsReplayed(t *testing.T) {
 	fake := newFakeStore()
 	hub, wsURL := newChatServer(t, fake)
-	rm := hub.Create()
+	rm := openRoom(t, hub, fake)
 
 	a := dial(t, wsURL)
 	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
@@ -263,33 +284,9 @@ func TestChatHistoryIsReplayed(t *testing.T) {
 	}
 }
 
-// Without a database the app must still deliver chat live, and say plainly
-// that there is no history rather than showing an empty conversation.
-func TestChatWorksWithoutAStore(t *testing.T) {
-	hub, wsURL := newChatServer(t, nil)
-	rm := hub.Create()
-
-	a := dial(t, wsURL)
-	send(t, a, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_a"})
-	expect(t, a, protocol.TypeJoined)
-	b := dial(t, wsURL)
-	send(t, b, protocol.Envelope{Type: protocol.TypeJoin, RoomID: rm.ID, UserID: "user_b"})
-	expect(t, b, protocol.TypeJoined)
-
-	send(t, a, protocol.Envelope{
-		Type: protocol.TypeChat,
-		Chat: &protocol.ChatMessage{Kind: protocol.ChatText, Text: "still works"},
-	})
-	if got := expect(t, b, protocol.TypeChat); got.Chat.Text != "still works" {
-		t.Fatalf("live chat = %q, want it delivered without a database", got.Chat.Text)
-	}
-
-	send(t, b, protocol.Envelope{Type: protocol.TypeChatHistory})
-	history := expect(t, b, protocol.TypeChatHistory)
-	if len(history.Messages) != 0 || history.HasMore {
-		t.Fatalf("history = %+v, want an empty page", history)
-	}
-}
+// Chat without a store is no longer a supported mode: membership is what opens
+// a room, and membership lives in the store. TestJoinIsRefusedWithoutAStore in
+// handler_test.go covers what happens instead.
 
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()

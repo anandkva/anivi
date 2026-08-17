@@ -1,5 +1,5 @@
 import { apiUrl } from '../lib/config';
-import { loadPairing } from '../lib/storage';
+import { loadAccount } from '../lib/storage';
 
 /**
  * The Anivi widget surface.
@@ -27,8 +27,8 @@ interface RoomState {
 }
 
 const params = new URLSearchParams(location.search);
-const roomId = params.get('room') ?? loadPairing()?.roomId ?? '';
-const userId = params.get('user') ?? loadPairing()?.userId ?? '';
+const roomId = params.get('room') ?? '';
+const userId = params.get('user') ?? loadAccount()?.userId ?? '';
 // Widget hosts often have no gesture affordances beyond a tap, so the Miss You
 // button is opt-in via ?actions=1.
 const showActions = params.get('actions') === '1';

@@ -112,6 +112,20 @@ func (r *Room) Paired() bool {
 	return len(r.members) >= 2
 }
 
+// HasUserOtherThan reports whether anyone besides userID is attached right
+// now. It is what decides between delivering over the socket and sending a
+// push: someone with the app open has already seen it.
+func (r *Room) HasUserOtherThan(userID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, sub := range r.subs {
+		if sub.UserID() != userID {
+			return true
+		}
+	}
+	return false
+}
+
 // Broadcast sends msg to every connection except exceptConnID (pass "" to
 // include everyone).
 func (r *Room) Broadcast(msg []byte, exceptConnID string) {

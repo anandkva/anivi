@@ -171,3 +171,53 @@ self.addEventListener('message', (event) => {
       .then(renderWidgets),
   );
 });
+
+/* ---------------------------------------------------------------------------
+ * Push notifications.
+ *
+ * The payload deliberately carries no message text — Anivi encrypts the
+ * conversation at rest, and a notification travels through a push service and
+ * lands on a lock screen. The notification says who, not what.
+ * ------------------------------------------------------------------------- */
+
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = {};
+  }
+
+  const title = data.title || 'Anivi ❤️';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || 'Something new in your space',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      // One notification per room: a second message replaces the first
+      // rather than stacking a pile of buzzes.
+      tag: data.tag || 'anivi',
+      renotify: true,
+      data: { roomId: data.roomId || '' },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const roomId = event.notification.data && event.notification.data.roomId;
+  const url = roomId ? `/?room=${encodeURIComponent(roomId)}` : '/';
+
+  // Focus the app if it is already open rather than opening a second copy.
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      for (const client of windows) {
+        if (client.url.includes(self.location.origin)) {
+          client.postMessage({ type: 'anivi:open-room', roomId });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
+});

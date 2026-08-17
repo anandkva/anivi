@@ -10,7 +10,6 @@ import (
 	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
-	"github.com/anivi/server/store"
 	"github.com/gorilla/websocket"
 )
 
@@ -25,7 +24,7 @@ const (
 //
 // store and media may be nil: without them chat is live-only and attachments
 // are unavailable, but drawing and Miss You are unaffected.
-func Handler(hub *room.Hub, store Persister, media AttachmentLinker, originAllowed func(string) bool) http.HandlerFunc {
+func Handler(hub *room.Hub, store Persister, media AttachmentLinker, notifier Notifier, originAllowed func(string) bool) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -44,17 +43,16 @@ func Handler(hub *room.Hub, store Persister, media AttachmentLinker, originAllow
 			// Upgrade already wrote an error response.
 			return
 		}
-		c := newClient(hub, store, media, conn)
+		c := newClient(hub, store, media, notifier, conn)
 		go c.writePump()
 
-		// A client may pass its pairing in the query string so that a
+		// A client may name the connection in the query string so that a
 		// reconnect needs no extra round trip.
 		if roomID := r.URL.Query().Get("roomId"); roomID != "" {
 			c.handleMessage(protocol.Envelope{
-				Type:     protocol.TypeJoin,
-				RoomID:   roomID,
-				UserID:   r.URL.Query().Get("userId"),
-				LoveCode: r.URL.Query().Get("loveCode"),
+				Type:   protocol.TypeJoin,
+				RoomID: roomID,
+				UserID: r.URL.Query().Get("userId"),
 			})
 		}
 		c.readPump()
@@ -104,38 +102,34 @@ func (c *Client) handleMessage(env protocol.Envelope) {
 	}
 }
 
+// handleJoin admits a client to the room behind one of its connections.
+//
+// Membership is the whole authorization: the connection record names exactly two
+// user ids, and the joiner has to present one of them. A room id alone is not
+// enough, which matters now that a room outlives any single pairing — an id that
+// leaks (a shared screenshot, a stale link) opens nothing on its own.
 func (c *Client) handleJoin(env protocol.Envelope) {
-	var (
-		r   *room.Room
-		err error
-	)
-	switch {
-	case env.RoomID != "":
-		r, err = c.hub.ByID(env.RoomID)
-		if err != nil && env.LoveCode != "" {
-			// The room is gone (server restart, or an idle host that shut the
-			// process down). A client holding both the room id and the Love
-			// Code may re-open its space rather than having to pair again.
-			r, err = c.hub.Reclaim(env.RoomID, env.LoveCode)
-		}
-	case env.LoveCode != "":
-		code := pairing.NormalizeLoveCode(env.LoveCode)
-		if code == "" {
-			c.sendError(protocol.ErrRoomNotFound, "that Love Code doesn't look right")
-			return
-		}
-		r, err = c.hub.ByCode(code)
-		if err != nil {
-			// The partner may be joining a space this process has not loaded
-			// since it restarted. The database still knows the pairing.
-			r, err = c.reviveFromStore(code)
-		}
-	default:
-		c.sendError(protocol.ErrBadMessage, "join needs a roomId or a loveCode")
+	if env.RoomID == "" {
+		c.sendError(protocol.ErrBadMessage, "join needs a roomId")
 		return
 	}
+	if env.UserID == "" {
+		c.sendError(protocol.ErrUnauthorized, "join needs the account this device signed in as")
+		return
+	}
+	if !c.isMember(env.RoomID, env.UserID) {
+		// Deliberately the same message whether the room is unknown or the
+		// caller simply is not in it: distinguishing them would confirm that a
+		// room id exists.
+		c.sendError(protocol.ErrRoomNotFound, "that connection is not open to you")
+		return
+	}
+
+	// Adopt rather than look up: after a restart the live room is gone while the
+	// connection behind it is not, and re-opening it empty is the right answer.
+	r, err := c.hub.Adopt(env.RoomID)
 	if err != nil {
-		c.sendError(protocol.ErrRoomNotFound, "that space no longer exists")
+		c.sendError(protocol.ErrRoomNotFound, "that connection no longer exists")
 		return
 	}
 
@@ -146,20 +140,12 @@ func (c *Client) handleJoin(env protocol.Envelope) {
 	}
 
 	c.userID = env.UserID
-	if c.userID == "" {
-		c.userID = pairing.UserID()
-	}
 	c.room = r
 	online := r.Join(c)
-
-	// Keep the durable record fresh, so this pairing can be rebuilt after a
-	// restart even if neither partner has the room id to hand.
-	c.rememberRoom(r)
 
 	c.sendEnvelope(protocol.Envelope{
 		Type:      protocol.TypeJoined,
 		RoomID:    r.ID,
-		LoveCode:  r.LoveCode,
 		UserID:    c.userID,
 		Online:    online,
 		Paired:    r.Paired(),
@@ -169,43 +155,29 @@ func (c *Client) handleJoin(env protocol.Envelope) {
 	broadcastPresence(r, online)
 }
 
-// reviveFromStore rebuilds a room from its durable record when this process
-// has never heard of the Love Code — the case where the partner reconnects
-// first after a restart.
-func (c *Client) reviveFromStore(loveCode string) (*room.Room, error) {
+// isMember asks the store whether userID is one of the two people in the
+// connection that owns roomID.
+//
+// Without a store there are no accounts and so no connections, and nothing can
+// be authorized — the server refuses rather than falling back to trusting the
+// room id.
+func (c *Client) isMember(roomID, userID string) bool {
 	if c.store == nil {
-		return nil, room.ErrNotFound
+		return false
 	}
-	finder, ok := c.store.(interface {
-		RoomByCode(ctx context.Context, loveCode string) (store.RoomRecord, error)
-	})
+	finder, ok := c.store.(ConnectionFinder)
 	if !ok {
-		return nil, room.ErrNotFound
+		return false
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
 
-	rec, err := finder.RoomByCode(ctx, loveCode)
+	conn, err := finder.ConnectionByRoom(ctx, roomID)
 	if err != nil {
-		return nil, room.ErrNotFound
+		return false
 	}
-	return c.hub.Reclaim(rec.RoomID, rec.LoveCode)
-}
-
-// rememberRoom records the pairing so it outlives this process.
-func (c *Client) rememberRoom(r *room.Room) {
-	if c.store == nil {
-		return
-	}
-	roomID, loveCode := r.ID, r.LoveCode
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-		defer cancel()
-		if err := c.store.SaveRoom(ctx, roomID, loveCode); err != nil {
-			log.Printf("anivi: save room %s: %v", roomID, err)
-		}
-	}()
+	return conn.Has(userID)
 }
 
 // sendState replays the whole room so a fresh or reconnected client draws

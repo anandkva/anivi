@@ -69,6 +69,11 @@ func (c *Client) handleChat(r *room.Room, env protocol.Envelope) {
 	})
 
 	c.persist(msg)
+
+	// The socket delivered it to anyone watching; this reaches the person who
+	// isn't.
+	title, body := notificationFor(msg, c.displayName())
+	c.notifyPeer(r, title, body)
 }
 
 // activityLine is what the Home Screen widget shows for a new message. The
