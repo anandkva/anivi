@@ -70,6 +70,39 @@ export function HomeScreen({
     }
   }
 
+  const [showCodePopup, setShowCodePopup] = useState(false);
+  const showCodeCardInline = connections.length === 0;
+
+  const codeCardNode = (
+    <section className="code-card">
+      <p className="code-card-label">My Anivi Code</p>
+      <button className="code-card-value" onClick={copyCode}>
+        {copied ? 'Copied ❤️' : account.aniviCode}
+      </button>
+      <p className="code-card-hint">Share this with a partner, friend or family</p>
+
+      {pin ? (
+        <div className="pin-card">
+          <p className="pin-label">Sign-in PIN — keep this private</p>
+          <button
+            className="pin-value"
+            onClick={() => void navigator.clipboard.writeText(pin).catch(() => {})}
+          >
+            {pin}
+          </button>
+          <p className="pin-hint">
+            Save it now — it isn&rsquo;t shown again. You need it to sign in on another phone.
+            Never share it: your Anivi Code is public, this isn&rsquo;t.
+          </p>
+        </div>
+      ) : (
+        <button className="btn-inline pin-link" onClick={makePin} disabled={pinBusy}>
+          {pinBusy ? 'Creating…' : '🔑 Create a sign-in PIN (for another phone)'}
+        </button>
+      )}
+    </section>
+  );
+
   return (
     <main className="screen home">
       <header className="home-head">
@@ -77,38 +110,33 @@ export function HomeScreen({
           <p className="home-hello">Hi {account.name} ❤️</p>
           <p className="home-sub">Your little space for everyone</p>
         </div>
-        <button className="icon-btn" onClick={onSignOut} aria-label="Sign out" title="Sign out">
-          ⎋
-        </button>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {!showCodeCardInline && (
+            <button className="icon-btn" onClick={() => setShowCodePopup(true)} aria-label="Show my code" title="Show Anivi Code">
+              ℹ️
+            </button>
+          )}
+          <button className="icon-btn" onClick={onSignOut} aria-label="Sign out" title="Sign out">
+            ⎋
+          </button>
+        </div>
       </header>
 
-      <section className="code-card">
-        <p className="code-card-label">My Anivi Code</p>
-        <button className="code-card-value" onClick={copyCode}>
-          {copied ? 'Copied ❤️' : account.aniviCode}
-        </button>
-        <p className="code-card-hint">Share this with a partner, friend or family</p>
-
-        {pin ? (
-          <div className="pin-card">
-            <p className="pin-label">Sign-in PIN — keep this private</p>
-            <button
-              className="pin-value"
-              onClick={() => void navigator.clipboard.writeText(pin).catch(() => {})}
+      {showCodeCardInline && codeCardNode}
+      
+      {!showCodeCardInline && showCodePopup && (
+        <div className="lightbox" onClick={(e) => { if (e.target === e.currentTarget) setShowCodePopup(false); }} role="dialog">
+          <div style={{ position: 'relative', width: '100%', maxWidth: '420px', padding: '0 16px', zIndex: 10 }}>
+            <button 
+              onClick={() => setShowCodePopup(false)} 
+              style={{ position: 'absolute', top: '-12px', right: '4px', zIndex: 20, background: 'var(--surface)', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
             >
-              {pin}
+              ✕
             </button>
-            <p className="pin-hint">
-              Save it now — it isn&rsquo;t shown again. You need it to sign in on another phone.
-              Never share it: your Anivi Code is public, this isn&rsquo;t.
-            </p>
+            {codeCardNode}
           </div>
-        ) : (
-          <button className="btn-inline pin-link" onClick={makePin} disabled={pinBusy}>
-            {pinBusy ? 'Creating…' : '🔑 Create a sign-in PIN (for another phone)'}
-          </button>
-        )}
-      </section>
+        </div>
+      )}
 
       <section className="connections">
         <div className="connections-head">
