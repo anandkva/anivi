@@ -45,6 +45,7 @@ export function ChatSheet({
   const listRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const lastIdRef = useRef<string>('');
 
   // Follow the conversation, but only when a genuinely new message arrives —
@@ -61,6 +62,11 @@ export function ChatSheet({
     if (!text) return;
     onSendText(text);
     setDraft('');
+    keepComposerOpen();
+  }
+
+  function keepComposerOpen() {
+    window.requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
   }
 
   async function handleFile(file: File | undefined) {
@@ -71,6 +77,7 @@ export function ChatSheet({
       const uploaded = await uploadAttachment(roomId, myUserId, file);
       onSendImage(uploaded.key, uploaded.mime, uploaded.size, draft.trim());
       setDraft('');
+      keepComposerOpen();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't send that photo");
     } finally {
@@ -146,6 +153,7 @@ export function ChatSheet({
             onChange={(e) => void handleFile(e.target.files?.[0])}
           />
           <input
+            ref={inputRef}
             className="chat-input"
             value={draft}
             onChange={(e) => {
@@ -161,7 +169,13 @@ export function ChatSheet({
             placeholder="Message…"
             aria-label="Message"
           />
-          <button className="send-btn" onClick={submitText} disabled={!draft.trim()}>
+          <button
+            className="send-btn"
+            type="button"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={submitText}
+            disabled={!draft.trim()}
+          >
             ➤
           </button>
         </div>

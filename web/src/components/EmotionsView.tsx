@@ -49,7 +49,7 @@ export function EmotionsView({
   );
 
   /**
-   * How many of each you missed — the same set as the list below, counted per
+   * How many of each you missed, counted per
    * emotion. Not an all-time tally: the number on a tile answers "what am I
    * coming back to", and it clears once you have seen them.
    */
@@ -60,6 +60,15 @@ export function EmotionsView({
       counts.set(e.sticker, (counts.get(e.sticker) ?? 0) + 1);
     }
     return counts;
+  }, [missed]);
+
+  const missedGroups = useMemo(() => {
+    const latest = new Map<string, ChatMessage>();
+    for (const e of missed) {
+      if (!e.sticker) continue;
+      if (!latest.has(e.sticker)) latest.set(e.sticker, e);
+    }
+    return Array.from(latest.values());
   }, [missed]);
 
   return (
@@ -88,9 +97,10 @@ export function EmotionsView({
 
       <div className="emotion-history">
         {missed.length > 0 && (
-          <p className="emotion-history-title">
-            From {peerName} while you were away
-          </p>
+          <div className="emotion-missed-head" aria-live="polite">
+            <span className="emotion-history-title">Missed from {peerName}</span>
+            <span className="emotion-missed-total">{missed.length}</span>
+          </div>
         )}
 
         {loading && missed.length === 0 && <p className="chat-empty">Loading…</p>}
@@ -103,24 +113,33 @@ export function EmotionsView({
           </p>
         )}
 
-        <ul className="emotion-list">
-          {missed.map((e) => {
-            const sticker = stickerFor(e.sticker);
-            return (
-              <li key={e.id} className="emotion-row theirs">
-                <span className={`emotion-row-art ${sticker.animation ?? ''}`} aria-hidden="true">
-                  {sticker.art}
-                </span>
-                <span className="emotion-row-body">
-                  <span className="emotion-row-label">{sticker.label}</span>
-                  <span className="emotion-row-who">
-                    {peerName} · {relative(e.createdAt)}
+        {missedGroups.length > 0 && (
+          <div className="emotion-missed-strip" aria-label="Missed emotions">
+            {missedGroups.map((e, i) => {
+              const sticker = stickerFor(e.sticker);
+              return (
+                <button
+                  key={sticker.id}
+                  className="emotion-missed"
+                  style={{ animationDelay: `${i * 70}ms` }}
+                  onClick={() => onSend(sticker.id)}
+                  title={`Send ${sticker.label} back`}
+                >
+                  <span className={`emotion-row-art ${sticker.animation ?? ''}`} aria-hidden="true">
+                    {sticker.art}
                   </span>
-                </span>
-              </li>
-            );
-          })}
-        </ul>
+                  <span className="emotion-row-body">
+                    <span className="emotion-row-label">{sticker.label}</span>
+                    <span className="emotion-row-who">{relative(e.createdAt)}</span>
+                  </span>
+                  {(tally.get(sticker.id) ?? 0) > 1 && (
+                    <span className="emotion-missed-count">x{tally.get(sticker.id)}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );
