@@ -27,6 +27,7 @@ export interface Connection {
   /** When the newest message in this room was sent, and by whom. */
   lastActivityAt: number;
   lastActivityBy?: string;
+  unreadCount?: number;
 }
 
 export interface Me {

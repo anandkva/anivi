@@ -34,19 +34,42 @@ export interface Attachment {
   size: number;
   width?: number;
   height?: number;
+  duration?: number;
+  fileName?: string;
 }
 
-export type ChatKind = 'text' | 'sticker' | 'image' | 'emotion';
+export type ChatKind = 'text' | 'sticker' | 'image' | 'audio' | 'document' | 'emotion';
+
+export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read';
+
+export interface ChatReply {
+  id: string;
+  userId: string;
+  senderName: string;
+  text: string;
+  kind?: string;
+}
 
 export interface ChatMessage {
   id: string;
   roomId: string;
   userId: string;
+  senderName?: string;
   kind: ChatKind;
   text?: string;
   /** Names a piece of clipart the clients know how to draw. */
   sticker?: string;
   attachment?: Attachment;
+  status?: MessageStatus;
+  replyTo?: ChatReply;
+  reactions?: Record<string, string[]>; // emoji -> array of userIds
+  audioDuration?: number;
+  waveform?: number[];
+  fileName?: string;
+  fileSize?: number;
+  editedAt?: number;
+  deletedForEveryone?: boolean;
+  deletedForMe?: boolean;
   createdAt: number;
   /** Local only: set while an outgoing message is still in flight. */
   pending?: boolean;
@@ -61,6 +84,11 @@ export type ClientMessageType =
   | 'miss_you'
   | 'chat'
   | 'chat_history'
+  | 'chat_read'
+  | 'chat_delivery'
+  | 'chat_reaction'
+  | 'chat_edit'
+  | 'chat_delete'
   | 'nudge'
   | 'typing'
   | 'read'
@@ -98,6 +126,13 @@ export interface Envelope {
   before?: number;
   limit?: number;
   hasMore?: boolean;
+
+  // Real-time message status & reaction actions
+  messageId?: string;
+  reaction?: string;
+  status?: MessageStatus;
+  readReceiptsDisabled?: boolean;
+
   online?: number;
   paired?: boolean;
   timestamp?: number;
