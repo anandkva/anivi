@@ -14,6 +14,7 @@ import { stickerFor } from '../lib/stickers';
 import { buzz, playHeartChime, playSentBlip, unlockSound } from '../lib/sound';
 import type { Account, Connection } from '../lib/account';
 import { alreadySubscribed, enablePush, pushState } from '../lib/notifications';
+import { lastEmotionsSeenAt, markEmotionsSeen } from '../lib/storage';
 
 /** The canvas snapshot is republished at most this often. */
 const PREVIEW_DEBOUNCE_MS = 2500;
@@ -53,6 +54,8 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
   const [emotions, setEmotions] = useState<ChatMessage[]>([]);
   const [loadingEmotions, setLoadingEmotions] = useState(false);
   const [emotionNudge, setEmotionNudge] = useState(0);
+  /** Everything received after this is something this device hasn't seen. */
+  const [missedSince, setMissedSince] = useState(0);
   // Ephemeral, both ways: what the partner is doing right now.
   const [peerTyping, setPeerTyping] = useState(false);
   const [peerReadAt, setPeerReadAt] = useState(0);
@@ -257,6 +260,10 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
     let cancelled = false;
 
     setEmotionNudge(0);
+    // Snapshot the mark before moving it, so what you missed stays on screen
+    // while you are looking at it rather than vanishing as the tab opens.
+    setMissedSince(lastEmotionsSeenAt(roomId));
+    markEmotionsSeen(roomId);
     setLoadingEmotions(true);
     fetchHistory(roomId, account.userId, 0, 60, 'emotion')
       .then((page) => {
@@ -404,17 +411,9 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
     }
     playSentBlip();
     buzz(14);
-    setEmotions((prev) =>
-      mergeMessage(prev, {
-        id: `emo_local_${Date.now()}`,
-        roomId,
-        userId: account.userId,
-        kind: 'emotion',
-        sticker: stickerId,
-        text: label,
-        createdAt: Date.now(),
-      }),
-    );
+    // Nothing is added locally: the sender is not shown their own emotions
+    // (you cannot miss something you sent), and inserting a copy here used to
+    // duplicate the stored one when history loaded.
     maybeOfferPush();
     setNudge((prev) =>
       prev.phase === 'asking' && prev.sticker === stickerId
@@ -582,6 +581,7 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
           peerName={peerName}
           relationship={relationship}
           loading={loadingEmotions}
+          missedSince={missedSince}
           onSend={sendNudge}
         />
       )}
@@ -591,11 +591,9 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
           messages={messages}
           myUserId={account.userId}
           roomId={roomId}
-          relationship={relationship}
           hasMore={hasMoreHistory}
           loadingHistory={loadingHistory}
           onSendText={(text) => sendChat({ kind: 'text', text })}
-          onSendSticker={sendNudge}
           onSendImage={(key, mime, size, caption) =>
             sendChat({
               kind: 'image',

@@ -116,3 +116,34 @@ export function markSeen(roomId: string, at: number = Date.now()): void {
     /* private mode: badges just won't persist */
   }
 }
+
+/**
+ * When this device last looked at the Emotions tab of a room.
+ *
+ * Tracked separately from the conversation: opening the chat says nothing
+ * about whether you saw the hug someone sent.
+ */
+const EMOTIONS_SEEN_KEY = 'anivi.emotionsSeen.v1';
+
+function readEmotionsSeen(): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(EMOTIONS_SEEN_KEY) ?? '{}') as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+export function lastEmotionsSeenAt(roomId: string): number {
+  return readEmotionsSeen()[roomId] ?? 0;
+}
+
+export function markEmotionsSeen(roomId: string, at: number = Date.now()): void {
+  try {
+    const seen = readEmotionsSeen();
+    if ((seen[roomId] ?? 0) >= at) return;
+    seen[roomId] = at;
+    localStorage.setItem(EMOTIONS_SEEN_KEY, JSON.stringify(seen));
+  } catch {
+    /* private mode */
+  }
+}

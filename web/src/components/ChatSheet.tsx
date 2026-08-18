@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { uploadAttachment } from '../lib/api';
 import type { ChatMessage } from '../lib/protocol';
-import { actionsFor, stickerFor } from '../lib/stickers';
-import type { Relationship } from '../lib/account';
+import { stickerFor } from '../lib/stickers';
 
 interface Props {
   messages: ChatMessage[];
   myUserId: string;
   roomId: string;
-  /** Decides which virtual actions this space offers. */
-  relationship: Relationship;
   hasMore: boolean;
   loadingHistory: boolean;
 
@@ -20,7 +17,6 @@ interface Props {
   peerName: string;
   onTyping: () => void;
   onSendText: (text: string) => void;
-  onSendSticker: (stickerId: string) => void;
   onSendImage: (key: string, mime: string, size: number, caption: string) => void;
   onLoadOlder: () => void;
 }
@@ -30,7 +26,6 @@ export function ChatSheet({
   messages,
   myUserId,
   roomId,
-  relationship,
   hasMore,
   loadingHistory,
 
@@ -39,12 +34,10 @@ export function ChatSheet({
   peerName,
   onTyping,
   onSendText,
-  onSendSticker,
   onSendImage,
   onLoadOlder,
 }: Props) {
   const [draft, setDraft] = useState('');
-  const [stickersOpen, setStickersOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -136,36 +129,7 @@ export function ChatSheet({
           </p>
         )}
 
-        {stickersOpen && (
-          <div className="sticker-grid" role="group" aria-label="Stickers">
-            {actionsFor(relationship).map((s) => (
-              <button
-                key={s.id}
-                className="sticker-tile"
-                onClick={() => {
-                  onSendSticker(s.id);
-                  setStickersOpen(false);
-                }}
-                title={s.hint ?? s.label}
-              >
-                <span className={`sticker-art ${s.animation || ''}`} aria-hidden="true">
-                  {s.art}
-                </span>
-                <span className="sticker-label">{s.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
         <div className="chat-compose">
-          <button
-            className={`tool ${stickersOpen ? 'active' : ''}`}
-            onClick={() => setStickersOpen((v) => !v)}
-            aria-label="Stickers"
-            aria-pressed={stickersOpen}
-          >
-            💌
-          </button>
           <button
             className="tool"
             onClick={() => fileRef.current?.click()}

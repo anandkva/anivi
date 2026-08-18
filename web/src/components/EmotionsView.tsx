@@ -9,6 +9,8 @@ interface Props {
   peerName: string;
   relationship: Relationship;
   loading: boolean;
+  /** Anything received after this is something this device hasn't seen. */
+  missedSince: number;
   onSend: (stickerId: string) => void;
 }
 
@@ -26,23 +28,39 @@ export function EmotionsView({
   peerName,
   relationship,
   loading,
+  missedSince,
   onSend,
 }: Props) {
   const actions = useMemo(() => actionsFor(relationship), [relationship]);
 
-  // Newest first: the last thing that happened is the thing you came to see.
-  const history = useMemo(() => [...emotions].reverse(), [emotions]);
+  /**
+   * What you missed — not a log.
+   *
+   * Only emotions the other person sent after this device last opened the
+   * tab. Your own are never here (you cannot miss something you sent), and
+   * once you have seen them they do not come back on the next visit.
+   */
+  const missed = useMemo(
+    () =>
+      emotions
+        .filter((e) => e.userId !== myUserId && e.createdAt > missedSince)
+        .reverse(),
+    [emotions, myUserId, missedSince],
+  );
 
-  // How many of each you have exchanged, all time — the shape of a
-  // relationship in one line.
+  /**
+   * How many of each you missed — the same set as the list below, counted per
+   * emotion. Not an all-time tally: the number on a tile answers "what am I
+   * coming back to", and it clears once you have seen them.
+   */
   const tally = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const e of emotions) {
+    for (const e of missed) {
       if (!e.sticker) continue;
       counts.set(e.sticker, (counts.get(e.sticker) ?? 0) + 1);
     }
     return counts;
-  }, [emotions]);
+  }, [missed]);
 
   return (
     <section className="emotions-view" aria-label="Emotions">
@@ -60,7 +78,7 @@ export function EmotionsView({
             </span>
             <span className="emotion-label">{a.label}</span>
             {(tally.get(a.id) ?? 0) > 0 && (
-              <span className="emotion-count" aria-label={`${tally.get(a.id)} so far`}>
+              <span className="emotion-count" aria-label={`${tally.get(a.id)} missed`}>
                 {tally.get(a.id)}
               </span>
             )}
@@ -69,33 +87,34 @@ export function EmotionsView({
       </div>
 
       <div className="emotion-history">
-        <p className="emotion-history-title">
-          {history.length > 0 ? 'Between you two' : ''}
-        </p>
+        {missed.length > 0 && (
+          <p className="emotion-history-title">
+            From {peerName} while you were away
+          </p>
+        )}
 
-        {loading && history.length === 0 && <p className="chat-empty">Loading…</p>}
+        {loading && missed.length === 0 && <p className="chat-empty">Loading…</p>}
 
-        {!loading && history.length === 0 && (
+        {!loading && missed.length === 0 && (
           <p className="chat-empty">
-            Nothing yet ❤️
+            Nothing missed ❤️
             <br />
             <span>Tap one above — {peerName} gets it right away.</span>
           </p>
         )}
 
         <ul className="emotion-list">
-          {history.map((e) => {
+          {missed.map((e) => {
             const sticker = stickerFor(e.sticker);
-            const mine = e.userId === myUserId;
             return (
-              <li key={e.id} className={`emotion-row ${mine ? 'mine' : 'theirs'}`}>
+              <li key={e.id} className="emotion-row theirs">
                 <span className={`emotion-row-art ${sticker.animation ?? ''}`} aria-hidden="true">
                   {sticker.art}
                 </span>
                 <span className="emotion-row-body">
                   <span className="emotion-row-label">{sticker.label}</span>
                   <span className="emotion-row-who">
-                    {mine ? 'You sent' : `${peerName} sent`} · {relative(e.createdAt)}
+                    {peerName} · {relative(e.createdAt)}
                   </span>
                 </span>
               </li>
