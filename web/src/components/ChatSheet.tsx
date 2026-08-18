@@ -54,7 +54,11 @@ export function ChatSheet({
     const newest = messages[messages.length - 1];
     if (!newest || newest.id === lastIdRef.current) return;
     lastIdRef.current = newest.id;
-    bottomRef.current?.scrollIntoView({ block: 'end' });
+    
+    // Use scrollTop to avoid scrolling the entire window (which happens with scrollIntoView on mobile)
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
   }, [messages]);
 
   function submitText() {
@@ -160,6 +164,16 @@ export function ChatSheet({
               setDraft(e.target.value);
               onTyping();
             }}
+            onFocus={() => {
+              // Give the keyboard a moment to slide up
+              setTimeout(() => {
+                if (listRef.current) {
+                  listRef.current.scrollTop = listRef.current.scrollHeight;
+                }
+                // Also ensure the input is visible
+                inputRef.current?.scrollIntoView({ block: 'nearest' });
+              }, 300);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -173,6 +187,8 @@ export function ChatSheet({
             className="send-btn"
             type="button"
             onPointerDown={(e) => e.preventDefault()}
+            onMouseDown={(e) => e.preventDefault()}
+            onTouchStart={(e) => e.preventDefault()}
             onClick={submitText}
             disabled={!draft.trim()}
           >

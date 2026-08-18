@@ -13,7 +13,7 @@ import { AniviSocket, type ConnectionStatus } from '../lib/socket';
 import { stickerFor } from '../lib/stickers';
 import { buzz, playHeartChime, playSentBlip, unlockSound } from '../lib/sound';
 import type { Account, Connection } from '../lib/account';
-import { alreadySubscribed, enablePush, pushState } from '../lib/notifications';
+import { enablePush, pushState, syncPushSubscription } from '../lib/notifications';
 import { lastEmotionsSeenAt, markEmotionsSeen } from '../lib/storage';
 
 /** The canvas snapshot is republished at most this often. */
@@ -321,6 +321,10 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
       });
   }, [roomId]);
 
+  useEffect(() => {
+    if (pushState() === 'granted') void syncPushSubscription(account.userId);
+  }, [account.userId]);
+
   const schedulePreview = useCallback(() => {
     if (previewTimerRef.current !== null) window.clearTimeout(previewTimerRef.current);
     previewTimerRef.current = window.setTimeout(() => {
@@ -345,7 +349,12 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
    * their person is the moment it makes sense.
    */
   function maybeOfferPush() {
-    if (alreadySubscribed() || pushState() !== 'default') return;
+    const state = pushState();
+    if (state === 'granted') {
+      void syncPushSubscription(account.userId);
+      return;
+    }
+    if (state !== 'default') return;
     setOfferPush(true);
   }
 

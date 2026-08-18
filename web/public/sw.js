@@ -199,6 +199,9 @@ self.addEventListener('push', (event) => {
       tag: data.tag || 'anivi',
       renotify: true,
       data: { roomId: data.roomId || '' },
+    }).catch((err) => {
+      console.info('[anivi:sw] showNotification failed', err);
+      throw err;
     }),
   );
 });

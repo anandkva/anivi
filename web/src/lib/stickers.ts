@@ -26,11 +26,15 @@ export interface Sticker {
 
 const PARTNER: Sticker[] = [
  
-  { id: 'hug', art: '🤗', label: 'Hug', hint: 'kattikko', animation: 'anim-wiggle' },
+  { id: 'hug', art: '🤗', label: 'Hug you', hint: 'kattikko', animation: 'anim-wiggle' },
   { id: 'miss_you', art: '🥺', label: 'Miss You', hint: 'miss you', animation: 'anim-heartbeat' },
   { id: 'love', art: '❤️', label: 'Love', hint: 'love you da', animation: 'anim-heartbeat' },
-  { id: 'kiss', art: '💋', label: 'Kiss', hint: 'umma', animation: 'anim-float' },
-  { id: 'need_you', art: '🫂', label: 'Need You', animation: 'anim-pulse' },
+  { id: 'kiss', art: '💋', label: 'Muththa', hint: 'umma', animation: 'anim-float' },
+  { id: 'need_you', art: '🫂', label: 'Need You', hint: 'need you', animation: 'anim-pulse' },
+  { id: 'pappa', art: '👨‍👩‍👧‍👦', label: 'Pappa', hint: 'pappa', animation: 'anim-pulse' },
+  {id: 'pappu', art: '👨‍👩‍👧‍👦', label: 'Pappu', hint: 'pappu', animation: 'anim-pulse' },
+  {id:'hate_you', art: '😡', label: 'Hate You', hint: 'hate you', animation: 'anim-pulse' },
+
 ];
 
 const FRIEND: Sticker[] = [
@@ -39,6 +43,8 @@ const FRIEND: Sticker[] = [
   { id: 'awesome', art: '🔥', label: 'Awesome', animation: 'anim-float' },
   { id: 'lol', art: '😂', label: 'LOL', animation: 'anim-wiggle' },
   { id: 'thanks_friend', art: '🙌', label: 'Thanks', animation: 'anim-pulse' },
+  { id: 'help_me_friend', art: '🫂', label: 'Help Me', hint: 'help me', animation: 'anim-heartbeat' },
+
 ];
 
 const FAMILY: Sticker[] = [
@@ -47,6 +53,8 @@ const FAMILY: Sticker[] = [
   { id: 'blessings', art: '🙏', label: 'Blessings', animation: 'anim-pulse' },
   { id: 'help_me', art: '🫶', label: 'Help Me', animation: 'anim-heartbeat' },
   { id: 'home', art: '🏠', label: 'Home', animation: 'anim-float' },
+  {id:'waiting', art: '⏳', label: 'Waiting', hint: 'waiting', animation: 'anim-pulse' },
+  {id: 'coming_home', art: '🏡', label: 'Coming Home', hint: 'coming home', animation: 'anim-pulse' },
 ];
 
 const BY_RELATIONSHIP: Record<Relationship, Sticker[]> = {

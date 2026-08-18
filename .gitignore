@@ -13,6 +13,7 @@ dist/
 # Go
 anivi-server
 server/anivi-server
+server/.gocache/
 
 # macOS
 .DS_Store

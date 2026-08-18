@@ -14,7 +14,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -34,6 +36,15 @@ type Subscription struct {
 // Valid reports whether a subscription has everything needed to send.
 func (s Subscription) Valid() bool {
 	return s.Endpoint != "" && s.P256dh != "" && s.Auth != ""
+}
+
+// EndpointHost returns only the push-service host, safe for logs.
+func (s Subscription) EndpointHost() string {
+	u, err := url.Parse(s.Endpoint)
+	if err != nil || u.Host == "" {
+		return "unknown"
+	}
+	return u.Host
 }
 
 // Notification is the payload the service worker receives.
@@ -117,6 +128,10 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, n Notification) err
 	case http.StatusNotFound, http.StatusGone:
 		return ErrGone
 	default:
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		if len(body) > 0 {
+			return fmt.Errorf("push: service returned %s: %s", res.Status, string(body))
+		}
 		return fmt.Errorf("push: service returned %s", res.Status)
 	}
 }

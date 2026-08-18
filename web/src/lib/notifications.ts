@@ -10,12 +10,18 @@ import { apiUrl } from './config';
  */
 
 const STORAGE_KEY = 'anivi.push.v1';
+const SERVICE_WORKER_READY_TIMEOUT_MS = 8000;
 
 export type PushState = 'unsupported' | 'not-installed' | 'default' | 'granted' | 'denied';
 
 /** Whether this browser can receive push at all. */
 export function pushSupported(): boolean {
-  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  return (
+    window.isSecureContext &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window
+  );
 }
 
 /**
@@ -70,20 +76,74 @@ interface PushKey {
  * on.
  */
 export async function enablePush(userId: string): Promise<boolean> {
-  if (!pushSupported()) return false;
+  if (!pushSupported()) {
+    logPush('unsupported browser or insecure context');
+    remember(false);
+    return false;
+  }
+  if (isIOS && !isInstalled()) {
+    logPush('iOS push requires the installed Home Screen app');
+    remember(false);
+    return false;
+  }
 
   try {
-    const keyRes = await fetch(apiUrl('/api/push/key'));
-    const key = (await keyRes.json()) as PushKey;
-    if (!key.enabled || !key.publicKey) return false;
-
-    const permission = await Notification.requestPermission();
+    // Keep this as the first awaited browser API in the tap handler. iOS
+    // requires notification permission to be requested from direct user
+    // interaction; doing network work first can lose that activation.
+    const permission =
+      Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
     if (permission !== 'granted') {
+      logPush(`permission ${permission}`);
       remember(false);
       return false;
     }
 
-    const registration = await navigator.serviceWorker.ready;
+    return await syncPushSubscription(userId);
+  } catch (err) {
+    logPush('permission/subscription failed', err);
+    remember(false);
+    return false;
+  }
+}
+
+/**
+ * Re-sends the current browser subscription to the server.
+ *
+ * This is intentionally separate from permission prompting. iOS subscriptions
+ * belong to the installed web app context and may be missing even when local
+ * storage says "on"; the server may also have lost its copy after a database
+ * restore. When permission is already granted, calling this keeps both sides
+ * honest without showing another prompt.
+ */
+export async function syncPushSubscription(userId: string): Promise<boolean> {
+  if (!pushSupported() || (isIOS && !isInstalled()) || Notification.permission !== 'granted') {
+    return false;
+  }
+
+  try {
+    const keyRes = await fetch(apiUrl('/api/push/key'));
+    if (!keyRes.ok) {
+      logPush(`VAPID key request failed: ${keyRes.status}`);
+      remember(false);
+      return false;
+    }
+    const key = (await keyRes.json()) as PushKey;
+    if (!key.enabled || !key.publicKey) {
+      logPush('push disabled on server or VAPID public key missing');
+      remember(false);
+      return false;
+    }
+
+    const registration = await pushRegistration();
+    if (!registration?.pushManager) {
+      logPush('service worker registration or PushManager missing');
+      remember(false);
+      return false;
+    }
+
     // Reuse an existing subscription rather than churning endpoints, but
     // re-send it: the server may have forgotten it.
     const subscription =
@@ -93,21 +153,34 @@ export async function enablePush(userId: string): Promise<boolean> {
         applicationServerKey: urlBase64ToUint8Array(key.publicKey),
       }));
 
-    const json = subscription.toJSON() as { endpoint?: string; keys?: Record<string, string> };
+    const json = subscriptionJSON(subscription);
+    if (!json.endpoint || !json.p256dh || !json.auth) {
+      logPush('browser returned an incomplete PushSubscription', json);
+      remember(false);
+      return false;
+    }
+
     const res = await fetch(apiUrl('/api/push/subscribe'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userId}` },
       body: JSON.stringify({
-        endpoint: json.endpoint ?? '',
-        p256dh: json.keys?.p256dh ?? '',
-        auth: json.keys?.auth ?? '',
+        endpoint: json.endpoint,
+        p256dh: json.p256dh,
+        auth: json.auth,
       }),
     });
-    if (!res.ok) return false;
+    if (!res.ok) {
+      logPush(`server rejected subscription: ${res.status} ${await res.text()}`);
+      remember(false);
+      return false;
+    }
 
     remember(true);
+    logPush(`subscription saved (${endpointHost(json.endpoint)})`);
     return true;
-  } catch {
+  } catch (err) {
+    logPush('sync subscription failed', err);
+    remember(false);
     return false;
   }
 }
@@ -117,7 +190,7 @@ export async function disablePush(userId: string): Promise<void> {
   remember(false);
   if (!pushSupported()) return;
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await pushRegistration();
     const subscription = await registration.pushManager.getSubscription();
     if (!subscription) return;
 
@@ -130,6 +203,77 @@ export async function disablePush(userId: string): Promise<void> {
   } catch {
     /* nothing more to do */
   }
+}
+
+async function pushRegistration(): Promise<ServiceWorkerRegistration> {
+  const registered = await navigator.serviceWorker.getRegistration('/');
+  if (registered && scopeCoversApp(registered)) return registered;
+
+  const ready = await withTimeout(
+    navigator.serviceWorker.ready,
+    SERVICE_WORKER_READY_TIMEOUT_MS,
+    'service worker was not ready in time',
+  );
+  if (!scopeCoversApp(ready)) {
+    throw new Error(`service worker scope ${ready.scope} does not cover ${location.href}`);
+  }
+  return ready;
+}
+
+function scopeCoversApp(registration: ServiceWorkerRegistration): boolean {
+  const scope = new URL(registration.scope);
+  return location.href.startsWith(scope.href);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function subscriptionJSON(subscription: PushSubscription): {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+} {
+  const json = subscription.toJSON() as { endpoint?: string; keys?: Record<string, string> };
+  return {
+    endpoint: json.endpoint ?? subscription.endpoint,
+    p256dh: json.keys?.p256dh ?? keyToBase64Url(subscription.getKey('p256dh')),
+    auth: json.keys?.auth ?? keyToBase64Url(subscription.getKey('auth')),
+  };
+}
+
+function keyToBase64Url(key: ArrayBuffer | null): string {
+  if (!key) return '';
+  const bytes = new Uint8Array(key);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return 'unknown endpoint';
+  }
+}
+
+function logPush(message: string, detail?: unknown): void {
+  const prefix = '[anivi:push]';
+  if (detail !== undefined) console.info(prefix, message, detail);
+  else console.info(prefix, message);
 }
 
 /**

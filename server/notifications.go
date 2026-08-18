@@ -33,19 +33,25 @@ func (n *notifier) Notify(ctx context.Context, userID string, msg push.Notificat
 		log.Printf("anivi: subscriptions for %s: %v", userID, err)
 		return
 	}
+	if len(subs) == 0 {
+		log.Printf("anivi: push skipped for %s: no subscriptions", userID)
+		return
+	}
 
 	for _, sub := range subs {
 		err := n.sender.Send(ctx, sub, msg)
 		switch {
 		case err == nil:
+			log.Printf("anivi: push sent to %s via %s", userID, sub.EndpointHost())
 		case errors.Is(err, push.ErrGone):
 			// The browser is uninstalled or permission was revoked. Drop it so
 			// the list does not fill with dead endpoints.
+			log.Printf("anivi: push subscription gone for %s via %s", userID, sub.EndpointHost())
 			if delErr := n.store.DeleteSubscription(ctx, sub.Endpoint); delErr != nil {
 				log.Printf("anivi: drop dead subscription: %v", delErr)
 			}
 		default:
-			log.Printf("anivi: push to %s: %v", userID, err)
+			log.Printf("anivi: push to %s via %s: %v", userID, sub.EndpointHost(), err)
 		}
 	}
 }
@@ -89,6 +95,7 @@ func (a *api) subscribePush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "storage_error", "couldn't turn notifications on")
 		return
 	}
+	log.Printf("anivi: push subscription saved for %s via %s", user.UserID, sub.EndpointHost())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -112,5 +119,6 @@ func (a *api) unsubscribePush(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.DeleteSubscription(r.Context(), body.Endpoint); err != nil {
 		log.Printf("anivi: delete subscription: %v", err)
 	}
+	log.Printf("anivi: push subscription deleted via %s", push.Subscription{Endpoint: body.Endpoint}.EndpointHost())
 	w.WriteHeader(http.StatusNoContent)
 }
