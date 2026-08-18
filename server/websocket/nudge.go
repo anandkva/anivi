@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anivi/server/pairing"
 	"github.com/anivi/server/protocol"
 	"github.com/anivi/server/room"
 )
@@ -43,6 +44,20 @@ func (c *Client) handleNudge(r *room.Room, env protocol.Envelope) {
 	matched := r.Nudge(sticker, c.userID, nudgeWindow)
 	r.Touch(c.userID)
 
+	// An emotion is kept, not just felt: it belongs in the Emotions tab, it
+	// counts towards a badge when it is missed, and it puts the connection at
+	// the top of Home like any other arrival.
+	emotion := protocol.ChatMessage{
+		ID:        "emo_" + pairing.StrokeID(),
+		RoomID:    r.ID,
+		UserID:    c.userID,
+		Kind:      protocol.ChatEmotion,
+		Sticker:   sticker,
+		Text:      label,
+		CreatedAt: now.UnixMilli(),
+	}
+	c.persist(emotion)
+
 	msgType := protocol.TypeNudge
 	if matched {
 		msgType = protocol.TypeNudgeMatch
@@ -75,6 +90,21 @@ func (c *Client) handleNudge(r *room.Room, env protocol.Envelope) {
 		Text:      activityForNudge(label, matched),
 		Timestamp: now.UnixMilli(),
 	})
+
+	// A missed emotion should reach the phone, exactly like a missed message.
+	// The label is the whole point here, so unlike chat it goes in the body.
+	if !matched {
+		c.notifyPeer(r, c.displayName(), sentEmotionLine(label))
+	}
+}
+
+// sentEmotionLine is the notification body for an emotion. Naming it is the
+// point — "sent you something" would waste the notification.
+func sentEmotionLine(label string) string {
+	if label == "" {
+		return "Sent you an emotion 💌"
+	}
+	return "Sent you " + label
 }
 
 // activityForNudge is the Home Screen line. The wording comes from the client,

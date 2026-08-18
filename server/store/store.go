@@ -40,6 +40,7 @@ type Store struct {
 	users         *mongo.Collection
 	connections   *mongo.Collection
 	subscriptions *mongo.Collection
+	receipts      *mongo.Collection
 	// cipher encrypts message content at rest. Nil means the server was
 	// started without a key and messages are stored in the clear.
 	cipher *Cipher
@@ -83,6 +84,7 @@ func Connect(ctx context.Context, uri, database string) (*Store, error) {
 		users:         db.Collection(usersCollection),
 		connections:   db.Collection(connectionsCollection),
 		subscriptions: db.Collection(subscriptionsCollection),
+		receipts:      db.Collection(receiptsCollection),
 	}
 	if err := s.ensureIndexes(ctx); err != nil {
 		return nil, err
@@ -116,7 +118,10 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 	if err := s.ensureAccountIndexes(ctx); err != nil {
 		return err
 	}
-	return s.ensureSubscriptionIndexes(ctx)
+	if err := s.ensureSubscriptionIndexes(ctx); err != nil {
+		return err
+	}
+	return s.ensureReceiptIndexes(ctx)
 }
 
 // Close releases the connection.
@@ -190,11 +195,26 @@ func (s *Store) SaveMessage(ctx context.Context, msg protocol.ChatMessage) error
 // `before` timestamp (0 means "the latest"). hasMore reports whether older
 // messages exist beyond this page.
 func (s *Store) Messages(ctx context.Context, roomID string, before int64, limit int) (msgs []protocol.ChatMessage, hasMore bool, err error) {
+	return s.MessagesOfKind(ctx, roomID, "", before, limit)
+}
+
+// MessagesOfKind is Messages narrowed to one kind of entry.
+//
+// Emotions share the collection with the conversation — same room, same
+// ordering, same encryption — but they are a separate tab in the app, so each
+// view asks for what it shows. An empty kind means "the conversation", which
+// is everything except emotions.
+func (s *Store) MessagesOfKind(ctx context.Context, roomID, kind string, before int64, limit int) (msgs []protocol.ChatMessage, hasMore bool, err error) {
 	if limit <= 0 || limit > maxPageSize {
 		limit = defaultPageSize
 	}
 
 	filter := bson.M{"roomId": roomID}
+	if kind == protocol.ChatEmotion {
+		filter["kind"] = protocol.ChatEmotion
+	} else {
+		filter["kind"] = bson.M{"$ne": protocol.ChatEmotion}
+	}
 	if before > 0 {
 		filter["createdAt"] = bson.M{"$lt": before}
 	}

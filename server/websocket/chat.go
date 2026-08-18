@@ -124,7 +124,7 @@ func (c *Client) handleChatHistory(r *room.Room, env protocol.Envelope) {
 	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
 
-	msgs, hasMore, err := c.store.Messages(ctx, r.ID, env.Before, env.Limit)
+	msgs, hasMore, err := c.historyOfKind(ctx, r.ID, env.Kind, env.Before, env.Limit)
 	if err != nil {
 		log.Printf("anivi: history for %s: %v", r.ID, err)
 		c.sendError(protocol.ErrBadMessage, "couldn't load your messages")
@@ -137,10 +137,23 @@ func (c *Client) handleChatHistory(r *room.Room, env protocol.Envelope) {
 	c.sendEnvelope(protocol.Envelope{
 		Type:     protocol.TypeChatHistory,
 		RoomID:   r.ID,
+		Kind:     env.Kind,
 		Messages: msgs,
 		Before:   env.Before,
 		HasMore:  hasMore,
 	})
+}
+
+// KindReader is a store that can serve one kind of history at a time.
+type KindReader interface {
+	MessagesOfKind(ctx context.Context, roomID, kind string, before int64, limit int) ([]protocol.ChatMessage, bool, error)
+}
+
+func (c *Client) historyOfKind(ctx context.Context, roomID, kind string, before int64, limit int) ([]protocol.ChatMessage, bool, error) {
+	if reader, ok := c.store.(KindReader); ok {
+		return reader.MessagesOfKind(ctx, roomID, kind, before, limit)
+	}
+	return c.store.Messages(ctx, roomID, before, limit)
 }
 
 // withLink returns a copy of the message whose attachment carries a freshly

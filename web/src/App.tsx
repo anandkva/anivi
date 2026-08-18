@@ -36,7 +36,15 @@ export default function App() {
       setError('');
       try {
         const me = await fetchMe(userId);
-        setConnections(me.connections);
+        // Newest first — whoever last said something, either of you, is on
+        // top. A conversation you just replied to belongs at the top as much
+        // as one you just received.
+        setConnections(
+          [...me.connections].sort(
+            (a, b) =>
+              Math.max(b.lastActivityAt, b.createdAt) - Math.max(a.lastActivityAt, a.createdAt),
+          ),
+        );
         // The server is the authority on the name and code.
         setAccount(me.account);
         saveAccount(me.account);

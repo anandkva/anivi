@@ -70,6 +70,8 @@ type Client struct {
 	missYou missYouGate
 	// lastNudge throttles sticker taps. Only readPump touches it.
 	lastNudge time.Time
+	// lastTyping throttles typing frames. Only readPump touches it.
+	lastTyping time.Time
 }
 
 func newClient(hub *room.Hub, store Persister, media AttachmentLinker, notifier Notifier, conn *websocket.Conn) *Client {

@@ -15,9 +15,12 @@ export async function fetchHistory(
   userId: string,
   before = 0,
   limit = 40,
+  kind = '',
 ): Promise<{ messages: ChatMessage[]; hasMore: boolean }> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (before > 0) params.set('before', String(before));
+  // Emotions and the conversation share a collection but never a view.
+  if (kind) params.set('kind', kind);
 
   const res = await fetch(
     apiUrl(`/api/room/${encodeURIComponent(roomId)}/messages?${params.toString()}`),

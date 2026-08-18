@@ -15,6 +15,8 @@ const (
 	TypeChatHistory = "chat_history"
 	TypeChatRead    = "chat_read"
 	TypeNudge       = "nudge"
+	TypeTyping      = "typing"
+	TypeRead        = "read"
 	TypePing        = "ping"
 	TypePong        = "pong"
 )
@@ -29,6 +31,10 @@ const (
 	ChatText    = "text"
 	ChatSticker = "sticker"
 	ChatImage   = "image"
+	// ChatEmotion is a virtual action (hug, cheers, blessings). It lives in
+	// the same collection as chat so it gets history, counts and ordering for
+	// free, but clients keep it in its own tab: an emotion is not a remark.
+	ChatEmotion = "emotion"
 )
 
 // Message types sent by the server (in addition to the echoed types above).
@@ -137,6 +143,14 @@ type Envelope struct {
 	// only for the Home Screen line.
 	Sticker string `json:"sticker,omitempty"`
 	Label   string `json:"label,omitempty"`
+
+	// Typing is true while a partner is composing, false when they stop.
+	Typing bool `json:"typing,omitempty"`
+	// ReadAt is how far through the conversation someone has read.
+	ReadAt int64 `json:"readAt,omitempty"`
+	// Kind narrows a history request to one sort of message ("emotion" for
+	// the emotions tab, empty for the conversation).
+	Kind string `json:"kind,omitempty"`
 
 	// Chat carries a single message; Messages carries a page of history,
 	// oldest first. Before/Limit page backwards through it.

@@ -36,7 +36,7 @@ export interface Attachment {
   height?: number;
 }
 
-export type ChatKind = 'text' | 'sticker' | 'image';
+export type ChatKind = 'text' | 'sticker' | 'image' | 'emotion';
 
 export interface ChatMessage {
   id: string;
@@ -62,6 +62,8 @@ export type ClientMessageType =
   | 'chat'
   | 'chat_history'
   | 'nudge'
+  | 'typing'
+  | 'read'
   | 'ping'
   | 'pong';
 
@@ -85,6 +87,12 @@ export interface Envelope {
   /** Nudges: the sticker's id, and the client's own wording for it. */
   sticker?: string;
   label?: string;
+  /** True while the partner is composing. */
+  typing?: boolean;
+  /** How far through the conversation the partner has read. */
+  readAt?: number;
+  /** Narrows a history request: 'emotion' for the Emotions tab. */
+  kind?: string;
   chat?: ChatMessage;
   messages?: ChatMessage[];
   before?: number;

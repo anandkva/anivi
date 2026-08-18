@@ -95,6 +95,10 @@ func (c *Client) handleMessage(env protocol.Envelope) {
 		c.handleChat(r, env)
 	case protocol.TypeNudge:
 		c.handleNudge(r, env)
+	case protocol.TypeTyping:
+		c.handleTyping(r, env)
+	case protocol.TypeRead:
+		c.handleRead(r, env)
 	case protocol.TypeChatHistory:
 		c.handleChatHistory(r, env)
 	default:

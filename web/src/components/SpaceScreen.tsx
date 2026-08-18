@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from './Canvas';
 import { ChatSheet } from './ChatSheet';
+import { EmotionsView } from './EmotionsView';
 import { NudgeOverlay, type NudgeState } from './NudgeOverlay';
 import { SettingsSheet } from './SettingsSheet';
 import { fetchHistory } from '../lib/api';
@@ -47,7 +48,14 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lost, setLost] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<'chat' | 'board'>('chat');
+  type Tab = 'emotions' | 'chat' | 'board';
+  const [activeTab, setActiveTab] = useState<Tab>('chat');
+  const [emotions, setEmotions] = useState<ChatMessage[]>([]);
+  const [loadingEmotions, setLoadingEmotions] = useState(false);
+  const [emotionNudge, setEmotionNudge] = useState(0);
+  // Ephemeral, both ways: what the partner is doing right now.
+  const [peerTyping, setPeerTyping] = useState(false);
+  const [peerReadAt, setPeerReadAt] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -63,8 +71,10 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
   const [width, setWidth] = useState(PEN_WIDTHS[1].value);
 
   // Read inside socket callbacks, which capture the first render's values.
-  const activeTabRef = useRef<'chat' | 'board'>('chat');
+  const activeTabRef = useRef<Tab>('chat');
   activeTabRef.current = activeTab;
+  const typingTimerRef = useRef<number | null>(null);
+  const typingSentRef = useRef(false);
 
   const socketRef = useRef<AniviSocket | null>(null);
   const previewTimerRef = useRef<number | null>(null);
@@ -135,10 +145,25 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
         buzz(12);
       }),
 
+      socket.on('typing', (env) => {
+        if (env.userId === account.userId) return;
+        setPeerTyping(Boolean(env.typing));
+      }),
+
+      socket.on('read', (env) => {
+        if (env.userId === account.userId) return;
+        setPeerReadAt((prev) => Math.max(prev, env.readAt ?? 0));
+      }),
+
       socket.on('chat_history', (env) => {
         setLoadingHistory(false);
         setHasMoreHistory(Boolean(env.hasMore));
         const page = env.messages ?? [];
+        if (env.kind === 'emotion') {
+          setLoadingEmotions(false);
+          setEmotions((prev) => page.reduce(mergeMessage, prev));
+          return;
+        }
         setMessages((prev) => page.reduce(mergeMessage, prev));
       }),
 
@@ -146,6 +171,19 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
       socket.on('nudge', (env) => {
         if (!env.sticker || env.userId === account.userId) return;
         setNudge({ phase: 'asking', sticker: env.sticker, label: env.label ?? '', at: Date.now() });
+        // Keep it in the Emotions tab too, so a missed one is still there.
+        setEmotions((prev) =>
+          mergeMessage(prev, {
+            id: `emo_live_${env.timestamp ?? Date.now()}`,
+            roomId,
+            userId: env.userId ?? '',
+            kind: 'emotion',
+            sticker: env.sticker,
+            text: env.label,
+            createdAt: env.timestamp ?? Date.now(),
+          }),
+        );
+        if (activeTabRef.current !== 'emotions') setEmotionNudge((n) => n + 1);
         playHeartChime();
         buzz([16, 60, 16]);
       }),
@@ -212,6 +250,39 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
       cancelled = true;
     };
   }, [activeTab, socket, roomId, account.userId]);
+
+  // The Emotions tab has its own history, from the same store.
+  useEffect(() => {
+    if (activeTab !== 'emotions') return;
+    let cancelled = false;
+
+    setEmotionNudge(0);
+    setLoadingEmotions(true);
+    fetchHistory(roomId, account.userId, 0, 60, 'emotion')
+      .then((page) => {
+        if (cancelled) return;
+        setEmotions((prev) => page.messages.reduce(mergeMessage, prev));
+      })
+      .catch(() => socket.send({ type: 'chat_history', kind: 'emotion', limit: 60 }))
+      .finally(() => {
+        if (!cancelled) setLoadingEmotions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, socket, roomId, account.userId]);
+
+  /**
+   * Tells the partner this conversation has been read, and keeps it true:
+   * anything arriving while the chat is open is read the moment it lands.
+   */
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    const newest = messages[messages.length - 1];
+    if (!newest) return;
+    socket.send({ type: 'read', readAt: newest.createdAt });
+  }, [activeTab, messages, socket]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -311,7 +382,10 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
       chat: { ...optimistic, pending: undefined } as ChatMessage,
     });
     if (!sent) setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
-    else maybeOfferPush();
+    else {
+      stopTyping();
+      maybeOfferPush();
+    }
     return sent;
   }
 
@@ -330,11 +404,48 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
     }
     playSentBlip();
     buzz(14);
+    setEmotions((prev) =>
+      mergeMessage(prev, {
+        id: `emo_local_${Date.now()}`,
+        roomId,
+        userId: account.userId,
+        kind: 'emotion',
+        sticker: stickerId,
+        text: label,
+        createdAt: Date.now(),
+      }),
+    );
+    maybeOfferPush();
     setNudge((prev) =>
       prev.phase === 'asking' && prev.sticker === stickerId
         ? prev
         : { phase: 'waiting', sticker: stickerId, label, at: Date.now() },
     );
+  }
+
+  /**
+   * Signals typing, and stops signalling shortly after the keys stop.
+   *
+   * Nothing is stored and nothing is retried: if a "stopped" frame is lost the
+   * indicator clears itself on the other side anyway.
+   */
+  function handleTyping() {
+    if (!typingSentRef.current) {
+      typingSentRef.current = true;
+      socket.send({ type: 'typing', typing: true });
+    }
+    if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = window.setTimeout(() => {
+      typingSentRef.current = false;
+      socket.send({ type: 'typing', typing: false });
+    }, 2500);
+  }
+
+  function stopTyping() {
+    if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current);
+    if (!typingSentRef.current) return;
+    typingSentRef.current = false;
+    socket.send({ type: 'typing', typing: false });
   }
 
   function handleUndo() {
@@ -464,6 +575,17 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
         </>
       )}
 
+      {activeTab === 'emotions' && (
+        <EmotionsView
+          emotions={emotions}
+          myUserId={account.userId}
+          peerName={peerName}
+          relationship={relationship}
+          loading={loadingEmotions}
+          onSend={sendNudge}
+        />
+      )}
+
       {activeTab === 'chat' && (
         <ChatSheet
           messages={messages}
@@ -482,10 +604,25 @@ export function SpaceScreen({ account, connection, onBack, onDisconnected }: Pro
             })
           }
           onLoadOlder={() => void loadOlderMessages()}
+          peerTyping={peerTyping}
+          peerReadAt={peerReadAt}
+          peerName={peerName}
+          onTyping={handleTyping}
         />
       )}
 
       <nav className="bottom-nav" aria-label="Sections">
+        <button
+          className={`nav-btn ${activeTab === 'emotions' ? 'active' : ''}`}
+          onClick={() => setActiveTab('emotions')}
+          aria-current={activeTab === 'emotions'}
+        >
+          <span aria-hidden="true">💞</span>
+          Emotions
+          {emotionNudge > 0 && (
+            <span className="unread-tab">{emotionNudge > 9 ? '9+' : emotionNudge}</span>
+          )}
+        </button>
         <button
           className={`nav-btn ${activeTab === 'chat' ? 'active' : ''}`}
           onClick={() => setActiveTab('chat')}

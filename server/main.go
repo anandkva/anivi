@@ -228,7 +228,7 @@ func (a *api) messages(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	msgs, hasMore, err := a.store.Messages(ctx, roomID, before, limit)
+	msgs, hasMore, err := a.store.MessagesOfKind(ctx, roomID, r.URL.Query().Get("kind"), before, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", "couldn't load your messages")
 		return

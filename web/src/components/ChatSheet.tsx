@@ -13,6 +13,12 @@ interface Props {
   hasMore: boolean;
   loadingHistory: boolean;
 
+  /** True while the partner is composing. */
+  peerTyping: boolean;
+  /** How far the partner has read, as a timestamp. */
+  peerReadAt: number;
+  peerName: string;
+  onTyping: () => void;
   onSendText: (text: string) => void;
   onSendSticker: (stickerId: string) => void;
   onSendImage: (key: string, mime: string, size: number, caption: string) => void;
@@ -28,6 +34,10 @@ export function ChatSheet({
   hasMore,
   loadingHistory,
 
+  peerTyping,
+  peerReadAt,
+  peerName,
+  onTyping,
   onSendText,
   onSendSticker,
   onSendImage,
@@ -100,9 +110,23 @@ export function ChatSheet({
               msg={msg}
               mine={msg.userId === myUserId}
               showTime={showTime(messages, i)}
+              // Only the newest of your own messages carries the tick: a
+              // column of "Seen" down the thread is noise.
+              seen={msg.userId === myUserId && msg.createdAt <= peerReadAt && isLastMine(messages, i)}
               onOpenImage={setLightbox}
             />
           ))}
+
+          {peerTyping && (
+            <div className="bubble-row theirs" aria-live="polite">
+              <div className="bubble typing-bubble">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-who">{peerName} is typing…</span>
+              </div>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
 
@@ -160,7 +184,10 @@ export function ChatSheet({
           <input
             className="chat-input"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              onTyping();
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -189,11 +216,13 @@ function Bubble({
   msg,
   mine,
   showTime,
+  seen,
   onOpenImage,
 }: {
   msg: ChatMessage;
   mine: boolean;
   showTime: boolean;
+  seen: boolean;
   onOpenImage: (url: string) => void;
 }) {
   const sticker = msg.kind === 'sticker' ? stickerFor(msg.sticker) : null;
@@ -231,10 +260,23 @@ function Bubble({
 
         {msg.text && msg.kind !== 'sticker' && <p className="bubble-text">{msg.text}</p>}
 
-        {showTime && <span className="bubble-time">{clock(msg.createdAt)}</span>}
+        {showTime && (
+          <span className="bubble-time">
+            {clock(msg.createdAt)}
+            {mine && (msg.pending ? ' ·' : seen ? ' ✓✓' : ' ✓')}
+          </span>
+        )}
       </div>
     </div>
   );
+}
+
+/** Whether this is the newest message you sent. */
+function isLastMine(messages: ChatMessage[], i: number): boolean {
+  for (let j = messages.length - 1; j >= 0; j--) {
+    if (messages[j].userId === messages[i].userId) return j === i;
+  }
+  return false;
 }
 
 /** Timestamps only where they help: the last of a burst, or a gap in time. */
