@@ -121,6 +121,6 @@ which is all a native widget would be too. A native app would buy you:
 - an interactive **Miss You ❤️** button rendered by the OS.
 
 The backend is already shaped for it: a native client would speak the same
-WebSocket protocol ([PROTOCOL.md](../PROTOCOL.md)), write the snapshot into an
+WebSocket protocol ([API.md](../API.md)), write the snapshot into an
 App Group (iOS) or DataStore (Android), and call `WidgetCenter.reloadTimelines`
 / `updateAppWidget`. Nothing in the realtime core would change.

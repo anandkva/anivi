@@ -28,12 +28,23 @@ optional and independent — the app runs without either.
 
 | Variable | Enables | Example |
 | --- | --- | --- |
-| `MONGODB_URI` | saved chat history + pairing that survives restarts | `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/anivi?retryWrites=true&w=majority` |
+| `MONGODB_URI` | **accounts, connections, history** — without it nobody can sign in | `mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/anivi?retryWrites=true&w=majority` |
 | `MONGODB_DATABASE` | database name (default `anivi`) | `anivi` |
+| `ANIVI_MESSAGE_KEY` | encrypts message text at rest | `openssl rand -base64 32` |
+| `ANIVI_VAPID_PUBLIC_KEY` | push notifications | `go run ./cmd/vapid` prints a pair |
+| `ANIVI_VAPID_PRIVATE_KEY` | " | " |
+| `ANIVI_VAPID_SUBJECT` | " | `mailto:you@example.com` |
 | `AWS_REGION` | photo attachments | `ap-south-1` |
 | `AWS_BUCKET_NAME` | " | `your-bucket` |
 | `AWS_ACCESS_KEY_ID` | " | from an IAM user |
 | `AWS_SECRET_ACCESS_KEY` | " | from an IAM user |
+
+> **Keep `ANIVI_MESSAGE_KEY` safe and never change it in place.** It is the only
+> thing that can read messages already stored; losing it makes them permanently
+> unreadable, by design. Use a different key in production than in development.
+
+`MONGODB_URI` is no longer optional in practice: accounts and connection
+membership live there, so without it the app stops at the Create Account screen.
 
 `GET /health` tells you what came up:
 
@@ -42,11 +53,12 @@ curl -s https://anivi-server.onrender.com/health
 ```
 
 ```json
-{ "status": "ok", "chat": true, "attachments": true, ... }
+{ "status": "ok", "chat": true, "attachments": true, "notifications": true, ... }
 ```
 
-`chat: false` means Mongo didn't connect; `attachments: false` means the AWS
-variables are missing or wrong. The server logs the reason at startup.
+`chat: false` means Mongo didn't connect, `attachments: false` means the AWS
+variables are missing or wrong, and `notifications: false` means the VAPID keys
+are absent. The server logs the reason for each at startup.
 
 **MongoDB Atlas — allow Render to connect.** Atlas blocks unknown IPs by
 default, and a free Render instance has no fixed egress IP. Atlas → **Network
@@ -148,10 +160,10 @@ live in memory. Two consequences:
 
 - The first connection after a sleep takes 30–60 seconds to wake the server.
   Anivi reconnects on its own, so it looks like a slow "Connecting…".
-- Waking up starts an empty process. Anivi handles this: a client that still
-  has its room id **and** Love Code stored re-opens the same space
-  automatically (`Reclaim` in `server/room/hub.go`). **Pairing survives; the
-  drawing on the canvas does not.**
+- Waking up starts an empty process, but nothing is lost: accounts,
+  connections and history live in MongoDB, and the live room is re-opened from
+  the connection record the moment a member joins. **Only the drawing on the
+  board — which is memory-only by design — does not survive.**
 
 To avoid sleeping altogether, ping `/health` every 10 minutes from a free
 uptime monitor (UptimeRobot, Better Stack, or a GitHub Action on a cron). If
@@ -226,16 +238,23 @@ native clients, which send no `Origin` header, still connect.
 
 On two phones, or two browsers with different profiles:
 
-1. Open the Vercel URL on phone A → **Create Our Space ❤️** → note the Love Code.
-2. Open it on phone B → type the code → **Join ❤️**. Both should show
-   **Together**.
-3. Draw on A. It appears on B within a moment, and the reverse.
-4. Tap **Miss You ❤️** on A. B shows the hearts and plays the chime.
-5. Turn Wi-Fi off on B for ten seconds, then on. B reconnects on its own and
-   the canvas comes back — that is the state replay after `join`.
+1. Open the Vercel URL on phone A → **Create Account ❤️** → note the Anivi Code
+   and save the sign-in PIN.
+2. Open it on phone B → create an account there too → **+ New Connection** →
+   enter A's Anivi Code → pick **Partner / Friend / Family** → **Connect ❤️**.
+   The space appears on *both* home screens; B does not have to be entered on
+   A's phone as well.
+3. Open the connection on both → **Board** → draw on A. It appears on B within
+   a moment, and the reverse.
+4. **Emotions** on A → tap 🤗. B gets it (or a push, if their app is closed).
+   B taps the same one back → both screens play the match together.
+5. **Chat** → type on A. B sees the typing dots, then the message, and A's tick
+   turns to ✓✓ once B is looking.
+6. Turn Wi-Fi off on B for ten seconds, then on. B reconnects on its own and
+   the board comes back — that is the state replay after `join`.
 
-You can also share `https://anivi-tau.vercel.app/?code=LOVE-XXXXX` — the link
-prefills the code for your partner.
+Your Anivi Code is on the Home screen — tap it to copy, or use **Share my code**
+in the connect sheet to send it through any app.
 
 ---
 
@@ -270,7 +289,8 @@ host app.
 | Console: blocked by CORS | `ANIVI_ALLOWED_ORIGINS` doesn't list your Vercel origin | Add the exact origin, including `https://` |
 | Console: mixed content | `ws://` on an HTTPS page | Use `wss://` |
 | Pairing works, drawing doesn't | The WebSocket never upgraded (some proxies) | Check `curl -i https://host/ws` returns 400 "Bad Request" (upgrade required), not 404 |
-| "This space isn't available any more" | Room gone and no Love Code stored to re-open it | Create a new space and re-share the code |
+| "This space isn't available any more" | The other person removed the connection, or this device is signed into a different account | Reconnect with their Anivi Code |
+| Stuck on the Create Account screen | `MONGODB_URI` not set on the server — accounts need it | Set it in Render → Environment |
 | Both partners show as one | Two tabs on the same origin share one pairing | Use two devices, or two different browsers |
 
 Server logs: Render → your service → **Logs**. Every dropped connection and
